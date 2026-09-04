@@ -27,11 +27,17 @@ whole reason this exists; `cph-submit` doesn't do groups.
 
 1. `chrome://extensions` → enable **Developer mode** → **Load unpacked** → pick
    this `browser/` folder.
-2. In VS Code run **Codeforces: Relay info (browser submit)**. Copy the port and
-   token.
+2. In VS Code run **Codeforces: Relay info (browser submit)** — it copies one
+   `port:token` string.
 3. Open this extension's **Options** (`chrome://extensions` → Details → Extension
-   options) and paste them. Save.
+   options), paste it into **Paste from Relay info** (splits itself into the two
+   fields below it). Save.
 4. Stay signed in to codeforces.com in that Chrome profile.
+
+The token is stable now — pasted once, it survives window reloads, VS Code
+restarts, and extension updates. If it ever does go stale (rare — a manual
+`codeforces.relayToken` edit, or clearing extension storage), VS Code shows a
+one-click "re-pair" notification instead of failing silently.
 
 ## Use
 
@@ -56,6 +62,16 @@ whether the companion is polling, asleep, token-rejected, or absent. Also check
 the port/token match, that the VS Code window is open (the relay dies with it),
 and the service worker log at `chrome://extensions` → Details → *Inspect views:
 service worker*.
+
+### Toolbar icon — context-aware, any Codeforces page
+
+Clicking this extension's own toolbar icon opens VS Code at whatever page
+you're looking at, not just problems: a contest, gym, or problemset page
+reveals it in the Explorer tree; a group page reveals it too, adding the
+group first if it isn't already in `codeforces.groups`. Same launch-and-fall-
+back-to-Marketplace behavior as the in-page button, just triggered from the
+toolbar instead of a page button — useful on pages the button doesn't appear
+on (standings, problemset listing, group overview, ...).
 
 Chrome suspends this worker after ~30 s idle (`service worker (inactive)`). That
 is expected — a `chrome.alarms` keepalive re-polls every 30 s, and VS Code

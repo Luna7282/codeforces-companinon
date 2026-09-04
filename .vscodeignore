@@ -1,5 +1,8 @@
 .vscode/**
 src/**
+node_modules/**
+out/**
+!out/extension.js
 **/*.map
 tsconfig.json
 .gitignore

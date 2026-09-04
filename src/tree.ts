@@ -52,6 +52,25 @@ export class CodeforcesTree implements vscode.TreeDataProvider<Node> {
         this.emitter.fire(undefined);
     }
 
+    /**
+     * Lets `TreeView.reveal()` (used by the deep-link handler to land on a
+     * specific contest/group after a companion click) walk from a node up to
+     * a root without any extra bookkeeping — a contest/group node already
+     * carries everything needed to compute its section.
+     */
+    getParent(node: Node): Node | undefined {
+        if (node.type === 'contest') {
+            if (node.contest.kind === 'group') {
+                return { type: 'group', groupCode: node.contest.groupCode ?? '' };
+            }
+            return { type: 'section', id: node.contest.kind === 'gym' ? 'gym' : 'contests', label: '' };
+        }
+        if (node.type === 'group') {
+            return { type: 'section', id: 'groups', label: '' };
+        }
+        return undefined;
+    }
+
     getTreeItem(node: Node): vscode.TreeItem {
         switch (node.type) {
             case 'banner': {
@@ -73,12 +92,14 @@ export class CodeforcesTree implements vscode.TreeDataProvider<Node> {
             case 'section': {
                 const item = new vscode.TreeItem(node.label, vscode.TreeItemCollapsibleState.Collapsed);
                 item.contextValue = 'cfSection';
+                item.id = sectionNodeId(node.id);
                 return item;
             }
             case 'group': {
                 const item = new vscode.TreeItem(node.groupCode, vscode.TreeItemCollapsibleState.Collapsed);
                 item.iconPath = new vscode.ThemeIcon('organization');
                 item.contextValue = 'cfGroup';
+                item.id = groupNodeId(node.groupCode);
                 return item;
             }
             case 'contest': {
@@ -87,6 +108,7 @@ export class CodeforcesTree implements vscode.TreeDataProvider<Node> {
                 item.tooltip = contestUrl(node.contest);
                 item.iconPath = new vscode.ThemeIcon('list-ordered');
                 item.contextValue = 'cfContest';
+                item.id = contestNodeId(node.contest);
                 return item;
             }
             case 'rating': {
@@ -249,6 +271,19 @@ function resolveState(
         return 'attempted';
     }
     return 'untouched';
+}
+
+// Stable ids so TreeView.reveal() can match a freshly-built skeleton node
+// (see extension.ts's deep-link handler) against the real node `getChildren`
+// returns — reveal walks the tree by id, not by object identity.
+function sectionNodeId(id: string): string {
+    return `section:${id}`;
+}
+function groupNodeId(groupCode: string): string {
+    return `group:${groupCode}`;
+}
+function contestNodeId(contest: Contest): string {
+    return `contest:${contest.kind}:${contest.groupCode ?? ''}:${contest.id}`;
 }
 
 function describeContest(c: Contest): string {

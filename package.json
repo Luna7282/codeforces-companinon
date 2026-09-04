@@ -313,10 +313,11 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "vscode:prepublish": "npm run compile",
+    "bundle": "esbuild src/extension.ts --bundle --platform=node --format=cjs --target=node18 --external:vscode --minify --outfile=out/extension.js",
+    "vscode:prepublish": "npm run bundle",
     "gen:companion-config": "node scripts/gen-companion-config.js",
     "build:companion": "npm run gen:companion-config && node browser/build.js",
-    "selftest": "npm run compile && node out/relay.js && node out/archive.js && node out/migrate.js"
+    "selftest": "npm run compile && node out/relay.js && node out/archive.js && node out/migrate.js && npm run bundle && node scripts/check-activate.js"
   },
   "dependencies": {
     "cheerio": "^1.0.0"

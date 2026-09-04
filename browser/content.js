@@ -53,7 +53,7 @@
         if (ref.groupCode) {
             params.set('groupCode', ref.groupCode);
         }
-        const uri = `${CF_DEEPLINK.uriPrefix}?${params.toString()}`;
+        const uri = `${CF_DEEPLINK.uriBase}/openProblem?${params.toString()}`;
 
         let handled = false;
         const markHandled = () => {

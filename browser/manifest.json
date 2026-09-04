@@ -21,7 +21,7 @@
   "options_page": "options.html",
   "icons": { "16": "icons/16.png", "48": "icons/48.png", "128": "icons/128.png" },
   "action": {
-    "default_title": "Codeforces Inline relay — open options to configure",
+    "default_title": "Open this Codeforces page in VS Code",
     "default_icon": { "16": "icons/16.png", "48": "icons/48.png", "128": "icons/128.png" }
   }
 }

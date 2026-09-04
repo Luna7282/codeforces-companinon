@@ -17,8 +17,8 @@ import { problemDetail } from './scrape';
 import { Session } from './session';
 import { showStatement } from './statement';
 import { fetchLanguages, latestSubmissionId, submitSolution, watchVerdict } from './submit';
-import { CodeforcesTree } from './tree';
-import { ContestKind, Problem, Sample, problemUrl } from './types';
+import { CodeforcesTree, CodeforcesNode } from './tree';
+import { Contest, ContestKind, Problem, Sample, problemUrl } from './types';
 import { RelayServer } from './relay';
 import { setCacheDir, clearCache } from './cache';
 import { ResultsViewProvider, ResultsActions } from './resultsView';
@@ -40,6 +40,7 @@ import { showWalkthrough } from './walkthrough';
 let session: Session;
 let api: CodeforcesApi;
 let tree: CodeforcesTree;
+let explorerTreeView: vscode.TreeView<CodeforcesNode>;
 let output: vscode.OutputChannel;
 let status: vscode.StatusBarItem;
 let langStatus: vscode.StatusBarItem;
@@ -51,6 +52,46 @@ let panelFile: string | undefined;
 let panelMeta: ProblemMeta | undefined;
 
 const BANNER_DISMISSED_KEY = 'codeforces.setupBannerDismissed';
+
+/**
+ * `globalState.get()` then `.update()` is two steps with no atomicity across
+ * processes. This extension activates in every window, so on a fresh install
+ * two windows opening around the same time would both read "no token yet",
+ * each mint their own, and both write — last write wins in storage, but the
+ * window that lost the race keeps running its now-orphaned in-memory token
+ * until its next reload, when it picks up whatever the *next* race happened
+ * to leave behind. That's the "token keeps changing" bug: it only takes one
+ * such race, ever, to leave two windows permanently disagreeing.
+ *
+ * `globalStorageUri` is a real file shared by every window on this profile,
+ * so an exclusive create (`wx`) is atomic at the OS level: whichever window
+ * gets there first wins, and every other window — now or on a later reload —
+ * reads that same winning value back instead of minting its own.
+ */
+function loadOrCreateRelayToken(context: vscode.ExtensionContext): string {
+    const dir = context.globalStorageUri.fsPath;
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, 'relay-token');
+    // Seed from the old (racy) globalState value if one exists, so upgrading
+    // to this fix doesn't itself force one more re-pair.
+    const legacy = context.globalState.get<string>('codeforces.relayToken');
+    const candidate = legacy && legacy.length === 32 ? legacy : crypto.randomBytes(16).toString('hex');
+    try {
+        fs.writeFileSync(file, candidate, { flag: 'wx' });
+        return candidate;
+    } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') {
+            throw err;
+        }
+    }
+    const existing = fs.readFileSync(file, 'utf8').trim();
+    if (existing.length === 32) {
+        return existing;
+    }
+    // Empty/corrupt file (e.g. a crash mid-write) — nobody owns a valid value yet, reclaim it.
+    fs.writeFileSync(file, candidate);
+    return candidate;
+}
 
 export function activate(context: vscode.ExtensionContext): void {
     session = new Session(context.secrets);
@@ -104,16 +145,18 @@ export function activate(context: vscode.ExtensionContext): void {
     setCacheDir(context.globalStorageUri.fsPath);
     void initArchiveRoot();
 
-    // Persist the relay token so it survives window reloads — the companion is
-    // configured with it once and should not need re-pasting every reload.
-    const TOKEN_KEY = 'codeforces.relayToken';
-    let relayToken = context.globalState.get<string>(TOKEN_KEY);
-    if (!relayToken || relayToken.length !== 32) {
-        relayToken = crypto.randomBytes(16).toString('hex');
-        void context.globalState.update(TOKEN_KEY, relayToken);
-    }
-
-    relay = new RelayServer(relayToken, (m) => dbg(`[relay] ${m}`));
+    relay = new RelayServer(loadOrCreateRelayToken(context), (m) => dbg(`[relay] ${m}`), () => {
+        void vscode.window
+            .showWarningMessage(
+                'Codeforces: the companion extension is using an old relay token. Re-pair it.',
+                'Relay info'
+            )
+            .then((choice) => {
+                if (choice === 'Relay info') {
+                    void relayInfo();
+                }
+            });
+    });
     const relayPort = vscode.workspace.getConfiguration('codeforces').get<number>('relayPort', 27121);
     relay
         .start(relayPort)
@@ -129,8 +172,10 @@ export function activate(context: vscode.ExtensionContext): void {
             relay = undefined;
         });
 
+    explorerTreeView = vscode.window.createTreeView('codeforcesExplorer', { treeDataProvider: tree });
+
     context.subscriptions.push(
-        vscode.window.registerTreeDataProvider('codeforcesExplorer', tree),
+        explorerTreeView,
         vscode.commands.registerCommand('codeforces.refresh', () => {
             clearCache();
             api.invalidate();
@@ -581,16 +626,13 @@ async function relayInfo(): Promise<void> {
         void vscode.window.showWarningMessage('Codeforces: the submit relay is not running. Reload the window.');
         return;
     }
-    const pick = await vscode.window.showInformationMessage(
-        `Codeforces submit relay: 127.0.0.1:${relay.port}. Paste the port and token into the companion extension's options (browser/).`,
-        'Copy token',
-        'Copy port'
+    // One paste-able "port:token" string — the companion's options page
+    // accepts this in a single field and splits it, so there's exactly one
+    // clipboard round-trip instead of two separate copy actions.
+    await vscode.env.clipboard.writeText(`${relay.port}:${relay.token}`);
+    void vscode.window.showInformationMessage(
+        `Codeforces: copied "${relay.port}:${relay.token}" — paste it into the companion's "Paste from Relay info" field.`
     );
-    if (pick === 'Copy token') {
-        await vscode.env.clipboard.writeText(relay.token);
-    } else if (pick === 'Copy port') {
-        await vscode.env.clipboard.writeText(String(relay.port));
-    }
 }
 
 /** Verbose tracing — only reaches the output channel when codeforces.debug is on. */
@@ -754,6 +796,21 @@ async function logout(): Promise<void> {
     void vscode.window.showInformationMessage('Signed out of Codeforces.');
 }
 
+/** Adds a group code to `codeforces.groups` if it isn't there already. Returns whether it was newly added. */
+async function ensureGroupAdded(code: string): Promise<boolean> {
+    const cfg = vscode.workspace.getConfiguration('codeforces');
+    const groups = cfg.get<string[]>('groups', []);
+    if (groups.includes(code)) {
+        return false;
+    }
+    await cfg.update('groups', [...groups, code], vscode.ConfigurationTarget.Global);
+    tree.refresh();
+    if (!relay?.companionOnline) {
+        void promptCompanion('Reading a group’s contests');
+    }
+    return true;
+}
+
 async function addGroup(): Promise<void> {
     const input = await vscode.window.showInputBox({
         prompt: 'Group code or group URL',
@@ -765,15 +822,7 @@ async function addGroup(): Promise<void> {
     }
     const match = /group\/([A-Za-z0-9]+)/.exec(input);
     const code = (match ? match[1] : input).trim();
-    const cfg = vscode.workspace.getConfiguration('codeforces');
-    const groups = cfg.get<string[]>('groups', []);
-    if (!groups.includes(code)) {
-        await cfg.update('groups', [...groups, code], vscode.ConfigurationTarget.Global);
-    }
-    tree.refresh();
-    if (!relay?.companionOnline) {
-        void promptCompanion('Reading a group’s contests');
-    }
+    await ensureGroupAdded(code);
 }
 
 async function removeGroup(node?: { groupCode?: string }): Promise<void> {
@@ -793,32 +842,77 @@ async function removeGroup(node?: { groupCode?: string }): Promise<void> {
 
 const DEEPLINK_KINDS: ContestKind[] = ['contest', 'gym', 'group'];
 
+/** Brings the Explorer view forward with a contest/group/section node expanded and selected. */
+async function revealNode(node: CodeforcesNode): Promise<void> {
+    try {
+        await explorerTreeView.reveal(node, { select: true, focus: true, expand: true });
+    } catch {
+        // The node isn't in the tree yet (e.g. a fresh group with no cached
+        // contests) — refreshing and focusing the view is still useful.
+        tree.refresh();
+        await vscode.commands.executeCommand('codeforcesExplorer.focus');
+    }
+}
+
 /**
- * Handles vscode://<publisher>.<name>/openProblem?kind=&contestId=&index=&groupCode=&name=
- * — sent by the companion's "Open in VS Code" button (browser/content.js). The
- * URI itself is never hardcoded there either; both sides derive it from this
- * extension's own package.json (scripts/gen-companion-config.js).
+ * Handles vscode://<publisher>.<name>/openProblem, /openContest, /openGroup and
+ * /openProblemset — sent by the companion (a per-problem button, and the
+ * toolbar icon for any Codeforces page; browser/content.js and background.js).
+ * The URI itself is never hardcoded there either; both sides derive it from
+ * this extension's own package.json (scripts/gen-companion-config.js).
  */
 async function handleDeepLink(uri: vscode.Uri): Promise<void> {
-    if (uri.path !== '/openProblem') {
-        return;
-    }
     const q = new URLSearchParams(uri.query);
-    const kind = q.get('kind');
-    const contestId = Number(q.get('contestId'));
-    const index = q.get('index');
-    if (!kind || !DEEPLINK_KINDS.includes(kind as ContestKind) || !Number.isFinite(contestId) || !index) {
-        void vscode.window.showWarningMessage('Codeforces: could not open that link — it looks malformed.');
+
+    if (uri.path === '/openProblem') {
+        const kind = q.get('kind');
+        const contestId = Number(q.get('contestId'));
+        const index = q.get('index');
+        if (!kind || !DEEPLINK_KINDS.includes(kind as ContestKind) || !Number.isFinite(contestId) || !index) {
+            void vscode.window.showWarningMessage('Codeforces: could not open that link — it looks malformed.');
+            return;
+        }
+        const problem: Problem = {
+            contestId,
+            index,
+            name: q.get('name')?.trim() || index,
+            kind: kind as ContestKind,
+            groupCode: q.get('groupCode') || undefined
+        };
+        await openProblem(problem);
         return;
     }
-    const problem: Problem = {
-        contestId,
-        index,
-        name: q.get('name')?.trim() || index,
-        kind: kind as ContestKind,
-        groupCode: q.get('groupCode') || undefined
-    };
-    await openProblem(problem);
+
+    if (uri.path === '/openContest') {
+        const kind = q.get('kind');
+        const contestId = Number(q.get('contestId'));
+        if (!kind || !DEEPLINK_KINDS.includes(kind as ContestKind) || !Number.isFinite(contestId)) {
+            void vscode.window.showWarningMessage('Codeforces: could not open that link — it looks malformed.');
+            return;
+        }
+        const groupCode = q.get('groupCode') || undefined;
+        if (kind === 'group' && groupCode) {
+            await ensureGroupAdded(groupCode);
+        }
+        const contest: Contest = { id: contestId, name: '', kind: kind as ContestKind, groupCode };
+        await revealNode({ type: 'contest', contest });
+        return;
+    }
+
+    if (uri.path === '/openGroup') {
+        const groupCode = q.get('groupCode');
+        if (!groupCode) {
+            void vscode.window.showWarningMessage('Codeforces: could not open that link — it looks malformed.');
+            return;
+        }
+        await ensureGroupAdded(groupCode);
+        await revealNode({ type: 'group', groupCode });
+        return;
+    }
+
+    if (uri.path === '/openProblemset') {
+        await revealNode({ type: 'section', id: 'problemset', label: 'Problemset' });
+    }
 }
 
 async function openProblem(problem: Problem): Promise<void> {

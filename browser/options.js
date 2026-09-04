@@ -6,6 +6,18 @@ chrome.storage.local.get(['port', 'token', 'debug']).then((s) => {
     $('debug').checked = !!s.debug;
 });
 
+// "27121:3f9c..." from "Codeforces: Relay info" — split into the two real
+// fields and clear itself so it doesn't look like a third persisted value.
+$('pasteAll').addEventListener('input', () => {
+    const m = /^\s*(\d+)\s*:\s*([0-9a-f]+)\s*$/i.exec($('pasteAll').value);
+    if (!m) {
+        return;
+    }
+    $('port').value = m[1];
+    $('token').value = m[2];
+    $('pasteAll').value = '';
+});
+
 $('save').addEventListener('click', async () => {
     await chrome.storage.local.set({
         port: Number($('port').value) || 27121,

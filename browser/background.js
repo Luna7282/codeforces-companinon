@@ -7,6 +7,11 @@
  * never clicks Submit and never touches the challenge widget.
  */
 
+// Classic (non-module) service worker — importScripts runs it in this same
+// scope, so CF_DEEPLINK (uriBase, marketplaceUrl) becomes available here too,
+// same generated file the content-script button uses.
+importScripts('deeplink-config.js');
+
 const DEFAULT_PORT = 27121;
 // Must match PROTOCOL_VERSION in src/relay.ts. Bumped only when the wire
 // protocol changes shape — see LESSONS.md for why a mismatch must be loud,
@@ -413,3 +418,109 @@ polling = false; // defensive: never start wedged
 log('worker eval: calling pollLoop() now');
 pollLoop('startup');
 log('worker eval: end of script');
+
+// --- toolbar icon: context-aware "open this in VS Code" -----------------------
+// Unlike the in-page button (content.js, problem pages only), the toolbar icon
+// fires on any codeforces.com page, so it needs its own URL classification —
+// same regexes as content.js's parseProblemRef, extended to contest/gym/group
+// overview pages and the problemset.
+
+function classifyCodeforcesUrl(url) {
+    let path;
+    try {
+        path = new URL(url).pathname;
+    } catch {
+        return null;
+    }
+    let m;
+    if ((m = /^\/group\/([^/]+)\/contest\/(\d+)\/problem\/([A-Za-z0-9]+)/.exec(path))) {
+        return { type: 'problem', kind: 'group', groupCode: m[1], contestId: Number(m[2]), index: m[3] };
+    }
+    if ((m = /^\/gym\/(\d+)\/problem\/([A-Za-z0-9]+)/.exec(path))) {
+        return { type: 'problem', kind: 'gym', contestId: Number(m[1]), index: m[2] };
+    }
+    if ((m = /^\/contest\/(\d+)\/problem\/([A-Za-z0-9]+)/.exec(path))) {
+        return { type: 'problem', kind: 'contest', contestId: Number(m[1]), index: m[2] };
+    }
+    if ((m = /^\/problemset\/problem\/(\d+)\/([A-Za-z0-9]+)/.exec(path))) {
+        return { type: 'problem', kind: 'contest', contestId: Number(m[1]), index: m[2] };
+    }
+    // Non-problem sub-pages of a contest/gym/group (overview, standings, ...) —
+    // must be checked after the problem patterns above, before the bare group one.
+    if ((m = /^\/group\/([^/]+)\/contest\/(\d+)/.exec(path))) {
+        return { type: 'contest', kind: 'group', groupCode: m[1], contestId: Number(m[2]) };
+    }
+    if ((m = /^\/gym\/(\d+)/.exec(path))) {
+        return { type: 'contest', kind: 'gym', contestId: Number(m[1]) };
+    }
+    if ((m = /^\/contest\/(\d+)/.exec(path))) {
+        return { type: 'contest', kind: 'contest', contestId: Number(m[1]) };
+    }
+    if ((m = /^\/group\/([^/]+)/.exec(path))) {
+        return { type: 'group', groupCode: m[1] };
+    }
+    if (/^\/problemset(\/|$)/.test(path)) {
+        return { type: 'problemset' };
+    }
+    return null;
+}
+
+function buildDeepLinkUri(ref) {
+    if (typeof CF_DEEPLINK === 'undefined') {
+        return null;
+    }
+    if (ref.type === 'problem') {
+        const params = new URLSearchParams({ kind: ref.kind, contestId: String(ref.contestId), index: ref.index });
+        if (ref.groupCode) params.set('groupCode', ref.groupCode);
+        return `${CF_DEEPLINK.uriBase}/openProblem?${params.toString()}`;
+    }
+    if (ref.type === 'contest') {
+        const params = new URLSearchParams({ kind: ref.kind, contestId: String(ref.contestId) });
+        if (ref.groupCode) params.set('groupCode', ref.groupCode);
+        return `${CF_DEEPLINK.uriBase}/openContest?${params.toString()}`;
+    }
+    if (ref.type === 'group') {
+        return `${CF_DEEPLINK.uriBase}/openGroup?${new URLSearchParams({ groupCode: ref.groupCode }).toString()}`;
+    }
+    if (ref.type === 'problemset') {
+        return `${CF_DEEPLINK.uriBase}/openProblemset`;
+    }
+    return null;
+}
+
+// Same custom-scheme-with-fallback heuristic as content.js, adapted for a
+// service worker (no `document`/`window`): if the OS hands off to VS Code,
+// Chrome itself loses focus. Navigating the clicked tab (not a new one) means
+// a *handled* link never disturbs the page — Chrome intercepts the scheme
+// before committing any navigation, same as the existing in-page button.
+async function openInVsCode(tab, uri) {
+    let lostFocus = false;
+    const onFocusChanged = (windowId) => {
+        if (windowId === chrome.windows.WINDOW_ID_NONE) lostFocus = true;
+    };
+    chrome.windows.onFocusChanged.addListener(onFocusChanged);
+    try {
+        await chrome.tabs.update(tab.id, { url: uri });
+        await sleep(1500);
+    } finally {
+        chrome.windows.onFocusChanged.removeListener(onFocusChanged);
+    }
+    if (!lostFocus) {
+        await chrome.tabs.create({ url: CF_DEEPLINK.marketplaceUrl, active: true });
+    }
+}
+
+chrome.action.onClicked.addListener((tab) => {
+    if (!tab || !tab.id || !tab.url) {
+        return;
+    }
+    const ref = classifyCodeforcesUrl(tab.url);
+    if (!ref) {
+        return; // not a page this can do anything with
+    }
+    const uri = buildDeepLinkUri(ref);
+    if (!uri) {
+        return;
+    }
+    openInVsCode(tab, uri).catch((e) => console.error('[cf-relay] toolbar deep link failed', e));
+});

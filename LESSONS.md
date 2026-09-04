@@ -288,6 +288,35 @@ self-test exercises every accepted and rejected auth shape over a real HTTP
 server, including the Bearer-header case the earlier ad hoc check had missed
 because it only ever exercised the custom header.
 
+### The token still wasn't stable — `globalState` has no cross-window atomicity
+
+The line above ("the token is persisted... instead of regenerated each time")
+described the intent, not reality: `globalState.get()` then `.update()` is
+two steps with no compare-and-set. This extension activates in every window
+(no `workspaceContains` restriction), so two windows opening around the same
+time both read "no token yet", each minted their own, and both wrote — last
+write wins in storage, but the window that lost the race kept running its
+now-orphaned in-memory token until its next reload, when it picked up
+whatever the *next* race happened to leave behind. It only takes one such
+race, ever, ~to permanently desync two windows' idea of the current token,
+which reads as "the token randomly changes every few hours" from the outside.
+
+Fixed by moving the token out of `globalState` and into a file under
+`globalStorageUri` (a real path shared by every window on the profile),
+written with `fs.writeFileSync(file, candidate, { flag: 'wx' })` — exclusive
+create, atomic at the OS level. Whichever window gets there first wins;
+every other window, now or on a later reload, reads that same file back
+instead of minting its own. Verified with 20 real concurrent processes
+racing to create the file: all 20 converged on one token every time, vs. the
+old `globalState` approach which had no such guarantee.
+
+Also added: `RelayServer` now takes an `onAuthRejected` callback, fired once
+when a poll request starts failing auth after a stretch of not failing
+(companion has a stale token). The extension turns that into a one-click
+"Codeforces: the companion is using an old relay token. Re-pair it." →
+**Relay info** notification, instead of the previous silent failure that
+only surfaced if the user thought to run **Check companion** themselves.
+
 ### MV3 service-worker suspension looks exactly like a Cloudflare failure
 
 Chrome suspends an idle MV3 service worker after roughly 30 seconds. When the

@@ -83,14 +83,18 @@ export class RelayServer {
     private lastCompanionError: { message: string; at: number } | undefined;
 
     /**
-     * @param token  shared secret every request must present, as `X-Relay-Token: <token>`
-     *               or `Authorization: Bearer <token>`. Persisted by the caller so it
-     *               survives window reloads.
-     * @param log    sink for one line per rejected request (endpoint, lengths, branch).
+     * @param token          shared secret every request must present, as `X-Relay-Token: <token>`
+     *                       or `Authorization: Bearer <token>`. Persisted by the caller so it
+     *                       survives window reloads.
+     * @param log            sink for one line per rejected request (endpoint, lengths, branch).
+     * @param onAuthRejected fired once when a poll request starts failing auth after a
+     *                       stretch of not failing — signals "the companion needs re-pairing"
+     *                       without spamming on every retry of an already-known break.
      */
     constructor(
         readonly token: string,
-        private readonly log: (msg: string) => void = () => {}
+        private readonly log: (msg: string) => void = () => {},
+        private readonly onAuthRejected: () => void = () => {}
     ) {}
 
     get running(): boolean {
@@ -291,7 +295,11 @@ export class RelayServer {
                 route === '/submit-result' ||
                 route === '/companion-error'
             ) {
+                const wasAlreadyFailing = Date.now() - this.lastRejectedAt < COMPANION_FRESH_MS;
                 this.lastRejectedAt = Date.now();
+                if (!wasAlreadyFailing) {
+                    this.onAuthRejected();
+                }
             }
             res.writeHead(401).end('unauthorized');
             return;

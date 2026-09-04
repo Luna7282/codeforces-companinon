@@ -45,8 +45,8 @@ says what a pass looks like and the failure you're most likely to hit.
 
 - Open this project (or any folder) in the VS Code where the vsix is installed.
 - Run **Codeforces: Relay info (browser submit)** from the command palette.
-- **Working:** an info toast: `Codeforces submit relay: 127.0.0.1:27121` with
-  **Copy token** / **Copy port** buttons. Click **Copy token**.
+- **Working:** copies `27121:<token>` to the clipboard in one action and shows
+  a confirmation toast with the copied string.
 - **Likely failure:** "the submit relay is not running" — port 27121 was already
   taken at activation. Set `codeforces.relayPort` to a free port, run
   **Developer: Reload Window**, retry.
@@ -56,11 +56,14 @@ says what a pass looks like and the failure you're most likely to hit.
 > ✓ Verified against live Codeforces — 2026-09-04.
 
 - `chrome://extensions` → the relay card → **Details** → **Extension options**.
-- Paste the port (27121 unless you changed it) and the token. **Save** →
+- Paste the copied `port:token` string into **Paste from Relay info** — it
+  splits into the port and token fields below it automatically. **Save** →
   "saved" flashes.
-- The token is persisted in VS Code (`globalState`), so it's stable across
-  window reloads — you configure this **once**. It only changes if you clear
-  extension global state.
+- The token lives in a file under the extension's global storage (not
+  `globalState` — see `LESSONS.md`, "the token still wasn't stable"), so it's
+  stable across window reloads, VS Code restarts, and extension updates. You
+  configure this **once**. If it ever does go stale, VS Code shows a one-click
+  re-pair notification instead of a silent failure.
 - Quick check from a terminal: `curl http://127.0.0.1:27121/health` →
   `{"ok":true,"port":27121,"tokenRequired":true}` (no token needed for
   `/health`). `curl -H "Authorization: Bearer <token>" .../pending` should
