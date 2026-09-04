@@ -1,0 +1,21 @@
+node_modules
+out
+dist
+*.vsix
+.env
+*.cookies.json
+*.session.json
+
+# Codeforces solution/attempt data. Never ship this — covers the pre-archive
+# layout and the current judge-agnostic archive layout, in case
+# codeforces.workspaceRoot is ever pointed at this repo folder.
+/group-*/
+/gym-*/
+/contest-*/
+/[0-9]*/
+/codeforces/
+.archive-index.json
+**/.cf/
+**/attempts/
+**/runs/
+**/.meta.json

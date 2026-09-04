@@ -1,0 +1,16 @@
+.vscode/**
+src/**
+**/*.map
+tsconfig.json
+.gitignore
+.vscodeignore
+scripts/**
+dist/**
+LESSONS.md
+TESTING.md
+
+# Generated solution folders — never ship the user's own solutions/history.
+group-*/**
+gym-*/**
+[0-9]*/**
+**/.cf/**

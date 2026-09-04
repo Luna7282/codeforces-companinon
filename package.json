@@ -1,0 +1,330 @@
+{
+  "name": "codeforces-inline",
+  "displayName": "Codeforces Inline",
+  "description": "Browse, solve and submit Codeforces contests, gyms and group contests without leaving VS Code.",
+  "version": "0.2.0",
+  "publisher": "replace-with-your-publisher-id",
+  "icon": "media/icon.png",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/replace-with-your-org/replace-with-your-repo.git"
+  },
+  "bugs": {
+    "url": "https://github.com/replace-with-your-org/replace-with-your-repo/issues"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "keywords": [
+    "codeforces",
+    "competitive programming",
+    "contest",
+    "judge",
+    "acm"
+  ],
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "codeforces",
+          "title": "Codeforces",
+          "icon": "media/cf.svg"
+        },
+        {
+          "id": "codeforcesArchive",
+          "title": "Codeforces Archive",
+          "icon": "$(archive)"
+        }
+      ]
+    },
+    "views": {
+      "codeforces": [
+        {
+          "id": "codeforcesExplorer",
+          "name": "Problems"
+        },
+        {
+          "id": "codeforcesResults",
+          "name": "Results",
+          "type": "webview"
+        }
+      ],
+      "codeforcesArchive": [
+        {
+          "id": "codeforcesArchiveView",
+          "name": "Archive"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "codeforces.login",
+        "title": "Codeforces: Log in"
+      },
+      {
+        "command": "codeforces.importSession",
+        "title": "Codeforces: Import session from browser"
+      },
+      {
+        "command": "codeforces.logout",
+        "title": "Codeforces: Log out"
+      },
+      {
+        "command": "codeforces.refresh",
+        "title": "Codeforces: Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "codeforces.addGroup",
+        "title": "Codeforces: Add group"
+      },
+      {
+        "command": "codeforces.removeGroup",
+        "title": "Codeforces: Remove group"
+      },
+      {
+        "command": "codeforces.openProblem",
+        "title": "Codeforces: Open problem"
+      },
+      {
+        "command": "codeforces.openInBrowser",
+        "title": "Codeforces: Open in browser"
+      },
+      {
+        "command": "codeforces.runTests",
+        "title": "Codeforces: Run sample tests"
+      },
+      {
+        "command": "codeforces.submit",
+        "title": "Codeforces: Submit current file"
+      },
+      {
+        "command": "codeforces.pickLanguage",
+        "title": "Codeforces: Choose submission language"
+      },
+      {
+        "command": "codeforces.lastVerdict",
+        "title": "Codeforces: Show last submission"
+      },
+      {
+        "command": "codeforces.relayInfo",
+        "title": "Codeforces: Relay info (browser submit)"
+      },
+      {
+        "command": "codeforces.checkCompanion",
+        "title": "Codeforces: Check companion"
+      },
+      {
+        "command": "codeforces.stats",
+        "title": "Codeforces: Stats"
+      },
+      {
+        "command": "codeforces.changeWorkspace",
+        "title": "Codeforces: Change workspace folder"
+      },
+      {
+        "command": "codeforces.setupWalkthrough",
+        "title": "Codeforces: Setup walkthrough"
+      },
+      {
+        "command": "codeforces.dismissSetupBanner",
+        "title": "Dismiss",
+        "icon": "$(close)"
+      },
+      {
+        "command": "codeforces.archiveRefresh",
+        "title": "Codeforces: Refresh archive",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "codeforces.archiveFilter",
+        "title": "Codeforces: Filter archive by verdict",
+        "icon": "$(filter)"
+      },
+      {
+        "command": "codeforces.archiveSearch",
+        "title": "Codeforces: Search archive by problem name",
+        "icon": "$(search)"
+      },
+      {
+        "command": "codeforces.archiveDiff",
+        "title": "Diff against current file",
+        "icon": "$(git-compare)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "codeforces.refresh",
+          "when": "view == codeforcesExplorer",
+          "group": "navigation"
+        },
+        {
+          "command": "codeforces.archiveSearch",
+          "when": "view == codeforcesArchiveView",
+          "group": "navigation@1"
+        },
+        {
+          "command": "codeforces.archiveFilter",
+          "when": "view == codeforcesArchiveView",
+          "group": "navigation@2"
+        },
+        {
+          "command": "codeforces.archiveRefresh",
+          "when": "view == codeforcesArchiveView",
+          "group": "navigation@3"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "codeforces.openInBrowser",
+          "when": "view == codeforcesExplorer && viewItem == cfProblem"
+        },
+        {
+          "command": "codeforces.removeGroup",
+          "when": "view == codeforcesExplorer && viewItem == cfGroup"
+        },
+        {
+          "command": "codeforces.archiveDiff",
+          "when": "view == codeforcesArchiveView && viewItem == cfArchiveEntry",
+          "group": "inline"
+        },
+        {
+          "command": "codeforces.dismissSetupBanner",
+          "when": "view == codeforcesExplorer && viewItem == cfSetupBanner",
+          "group": "inline"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "codeforces.dismissSetupBanner",
+          "when": "false"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "codeforces.runTests",
+        "key": "ctrl+alt+r",
+        "when": "editorTextFocus"
+      },
+      {
+        "command": "codeforces.submit",
+        "key": "ctrl+alt+enter",
+        "when": "editorTextFocus"
+      }
+    ],
+    "configuration": {
+      "title": "Codeforces Inline",
+      "properties": {
+        "codeforces.handle": {
+          "type": "string",
+          "default": "",
+          "description": "Your Codeforces handle. Used to mark solved problems and to watch your submissions."
+        },
+        "codeforces.workspaceRoot": {
+          "type": "string",
+          "default": "",
+          "scope": "application",
+          "description": "Root folder for all Codeforces content — solutions, problem metadata, local-run logs and the submission archive, under <root>/codeforces/. Set globally via 'Codeforces: Change workspace folder'; you are prompted for it on first use."
+        },
+        "codeforces.extension": {
+          "type": "string",
+          "default": ".cpp",
+          "description": "File extension used for new solution files."
+        },
+        "codeforces.templatePath": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to a template file copied into every new solution file."
+        },
+        "codeforces.compileCommand": {
+          "type": "string",
+          "default": "g++ -std=c++17 -O2 -o \"${bin}\" \"${file}\"",
+          "description": "Command used to compile. Leave empty for interpreted languages. Placeholders: ${file} ${bin} ${dir} ${name}"
+        },
+        "codeforces.runCommand": {
+          "type": "string",
+          "default": "\"${bin}\"",
+          "description": "Command used to run one test. Placeholders: ${file} ${bin} ${dir} ${name}"
+        },
+        "codeforces.timeoutMs": {
+          "type": "number",
+          "default": 5000,
+          "description": "Time limit applied to each sample test, in milliseconds."
+        },
+        "codeforces.programTypeId": {
+          "type": "string",
+          "default": "",
+          "description": "Codeforces compiler id used when submitting. Set it with 'Codeforces: Choose submission language'."
+        },
+        "codeforces.directSubmit": {
+          "type": "boolean",
+          "default": false,
+          "description": "Submit by POSTing straight from the extension instead of via the browser relay. Only works while Codeforces is NOT enforcing its Cloudflare Turnstile check on the submit form. Leave off to use the companion browser extension in browser/."
+        },
+        "codeforces.relayPort": {
+          "type": "number",
+          "default": 27121,
+          "description": "Localhost port for the submit relay the companion browser extension polls. Bound to 127.0.0.1 only; every request must carry a token shown by 'Codeforces: Relay info'."
+        },
+        "codeforces.debug": {
+          "type": "boolean",
+          "default": false,
+          "description": "Write verbose relay / command tracing to the Codeforces output channel. Off by default."
+        },
+        "codeforces.programTypeName": {
+          "type": "string",
+          "default": "",
+          "description": "Readable name of the chosen compiler. Set automatically."
+        },
+        "codeforces.groups": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Group codes to show in the tree, taken from codeforces.com/group/<code>."
+        },
+        "codeforces.contestLimit": {
+          "type": "number",
+          "default": 25,
+          "description": "How many recent and upcoming contests to list."
+        },
+        "codeforces.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Optional Codeforces API key from /settings/api. Only needed for data that is private to you."
+        },
+        "codeforces.apiSecret": {
+          "type": "string",
+          "default": "",
+          "description": "Optional Codeforces API secret that pairs with the key above."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "vscode:prepublish": "npm run compile",
+    "gen:companion-config": "node scripts/gen-companion-config.js",
+    "build:companion": "npm run gen:companion-config && node browser/build.js",
+    "selftest": "npm run compile && node out/relay.js && node out/archive.js && node out/migrate.js"
+  },
+  "dependencies": {
+    "cheerio": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.28.2",
+    "typescript": "^5.4.0"
+  }
+}

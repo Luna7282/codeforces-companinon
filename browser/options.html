@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Codeforces Inline relay — options</title>
+<style>
+  body { font: 14px system-ui, sans-serif; margin: 2rem; max-width: 30rem; }
+  label { display: block; margin: 1rem 0 0.3rem; font-weight: 600; }
+  input { width: 100%; padding: 0.4rem; font: inherit; box-sizing: border-box; }
+  button { margin-top: 1.2rem; padding: 0.5rem 1rem; font: inherit; }
+  .ok { color: green; margin-left: 0.6rem; }
+  p.hint { color: #666; margin-top: 1.5rem; }
+</style>
+</head>
+<body>
+  <h1>Codeforces Inline relay</h1>
+  <p>Run <em>Codeforces: Relay info (browser submit)</em> in VS Code and copy the values here.</p>
+
+  <label for="port">Relay port</label>
+  <input id="port" type="number" placeholder="27121" />
+
+  <label for="token">Relay token</label>
+  <input id="token" type="text" placeholder="hex token from VS Code" />
+
+  <label><input id="debug" type="checkbox" /> Verbose logging in the service worker console</label>
+
+  <button id="save">Save</button><span id="saved" class="ok" hidden>saved</span>
+
+  <p class="hint">
+    The companion opens the right submit page and fills the form. You solve the
+    Turnstile check and click <strong>Submit</strong> yourself — it never submits
+    for you.
+  </p>
+
+  <script src="options.js"></script>
+</body>
+</html>
