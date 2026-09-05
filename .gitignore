@@ -5,6 +5,7 @@ dist
 .env
 *.cookies.json
 *.session.json
+.claude
 
 # Codeforces solution/attempt data. Never ship this — covers the pre-archive
 # layout and the current judge-agnostic archive layout, in case
