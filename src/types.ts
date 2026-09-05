@@ -31,6 +31,8 @@ export interface ProblemDetail {
     samples: Sample[];
     timeLimit?: string;
     memoryLimit?: string;
+    /** Parsed off the statement page itself — authoritative over whatever name a caller already had. */
+    name?: string;
 }
 
 export interface Language {

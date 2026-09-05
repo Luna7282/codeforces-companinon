@@ -54,11 +54,6 @@ subsystems built on top of them.
   `/problemset/submit`, 34 on a specific contest's submit page, real
   ids/names in both (`43` GNU GCC C11, `54` G++17 7.3.0, `89` G++20, `91`
   G++23, `65` C# 8, …).
-- Statement images use root-relative `src` on some pages and are already
-  absolute on others (e.g. served from an `espresso.codeforces.com` CDN
-  subdomain) — rewrite only applies to the root-relative case, verified both
-  paths against a real statement.
-
 ### `groupContests` name bug — every contest showed as "Enter »"
 
 A group's contests page has its contest table as a `<table class="">`
@@ -380,6 +375,96 @@ side too, and stop polling until it's fixed — the intent is that a
 mismatched pair fails with a specific, visible message rather than a
 silent hang.
 
+### Statement images — broken icon, not a 403 the extension can see
+
+Reported as "the statement panel shows a single broken-image icon" on a
+problem with diagrams in its Note section. Investigated by loading the exact
+page in a real, logged-in Chrome session rather than guessing:
+
+- `naturalWidth`/`naturalHeight` on the one `<img>` in the statement came
+  back 4532x1658 — one wide image with four panels side by side (an ICPC-
+  style layout), not four missing images. The Note text's "the second
+  image / the third image" refers to panels within it.
+- The src was already absolute (`espresso.codeforces.com`, Codeforces's own
+  LaTeX/diagram render CDN) — not root-relative, not protocol-relative, so
+  the then-current prefix-matching rewrite correctly left it alone. That
+  ruled out the rewrite as the cause.
+- `curl` against that exact URL got `403` + a "Just a moment..." Cloudflare
+  challenge page, **with or without a `Referer` header** — so not hotlink
+  protection, the same TLS/bot-fingerprint block already documented for
+  `codeforces.com` itself, just on this CDN subdomain too. A blocked
+  response comes back `Content-Type: text/html`, which is exactly what
+  renders as a browser's broken-image icon in an `<img>` tag — there is no
+  403 for the extension to see or branch on, only a content-type mismatch.
+
+Fix: resolve every image `src` shape (root-relative, protocol-relative, bare)
+against the page URL with the `URL` constructor instead of prefix-matching,
+then fetch each one's bytes and inline as a `data:` URI — same
+Cloudflare-fallback pattern as a page fetch (direct attempt first, companion
+relay on failure), extended to binary: the fetch-job wire protocol gained a
+`binary` flag and a `contentType` field so the companion base64-encodes
+instead of mangling bytes through `.text()`, and success is judged by
+content type, never status code alone (a blocked response can share a
+status with a real one). `host_permissions` broadened from exact-origin
+`codeforces.com` to `*.codeforces.com` for this.
+
+Initially skipped a tab-based fallback for images the way the text-fetch path
+has one: that fallback works by running `fetch()` inside an already-open
+`codeforces.com` tab, same-origin, never hits CORS — but a same-page
+`fetch()` to `espresso.codeforces.com` throws a CORS-shaped `TypeError`,
+because that's a *different* subdomain (cross-origin). Shipped the
+service-worker fetch alone on the (reasonable, but wrong) theory that a
+genuine Chrome TLS fingerprint would be enough where curl/Node aren't.
+
+**It wasn't.** Real-world testing showed the companion's own service-worker
+fetch *also* gets the 403 + `text/html` challenge on this subdomain — TLS
+fingerprint alone doesn't pass Cloudflare's check here, it wants page
+context, same as the main site. Three follow-up paths tested by hand, in
+order, before writing any more code:
+
+1. **Same-page `<img>` → `canvas` → `toDataURL()`.** The image itself loads
+   fine (no CORS on a plain `<img src>`), but `toDataURL()` throws
+   `SecurityError: Tainted canvases may not be exported` — confirmed
+   `espresso.codeforces.com` sends no CORS headers, so the canvas is tainted
+   the moment the image is cross-origin to the page. Ruled out.
+2. **Open the image URL as a top-level navigation in a background tab, read
+   it back via canvas from inside that tab.** Works: a genuine top-level
+   navigation is not challenged (same as visiting any codeforces.com page
+   works) — Chrome's native image-viewer page loads the real image. Once
+   there, the page *is* espresso.codeforces.com, so the image is same-origin
+   to it and `canvas.toDataURL()` succeeds untainted. Confirmed end-to-end:
+   4532x1658 image in, a valid `data:image/png;base64,...` out. This is
+   what shipped — `chrome.tabs.create({url, active:false})`, wait for
+   `status:'complete'`, `chrome.scripting.executeScript` to read the canvas,
+   `chrome.tabs.remove` when done.
+3. **If that had also failed:** don't inline, and don't leave a bare `<img>`
+   pointed at a URL already known to be unreachable either — a broken icon
+   with no explanation is worse than an honest one. `problemDetail` replaces
+   such an `<img>` with a `.cf-image-unavailable` note plus a plain
+   `<a href>` to the original URL; VS Code webviews hand off a plain
+   `https://` anchor click to the user's real browser, where the image loads
+   fine (it was only ever blocked in the webview's own request contexts, not
+   a real browser navigation). This path is exercised by the self-test (one
+   fixture URL is made to fail every attempt) even though live testing never
+   needed it — path 2 covered the real case.
+
+Two false leads ruled out along the way, each confirmed rather than assumed:
+the webview's own CSP (`img-src https://codeforces.com https: data:;`) — the
+bare `https:` scheme token already permits any https host, so this was never
+the blocker even before inlining; and the statement cache — `clearCache()`
+(what **Codeforces: Refresh** already calls) deletes every `.json` file in
+the shared disk-cache directory, statements included, verified by writing a
+`problemDetail:` entry, clearing, and confirming the read comes back empty.
+Refresh already invalidated the stale HTML; what it doesn't do is force an
+*already-open* statement panel to re-render, which needs the problem
+reopened, not just the tree refreshed. Added a dedicated **Codeforces: Clear
+cache** command anyway, since Refresh's cache-clearing effect is otherwise
+silent and easy to mistake for "did nothing" — and `codeforces.debug`-gated
+logging through the whole `getImageDataUri` path (direct attempt, status/
+content-type seen, companion fallback, final inline-or-give-up decision) so
+a real failure shows exactly where it breaks instead of needing another
+round of hand-testing.
+
 ## Local archive
 
 ### Layout
@@ -500,25 +585,42 @@ fails for a companion-shaped reason.
 
 ### Deep link
 
-A `vscode://<publisher>.<name>/...` URI opens a specific problem in the
-editor directly from a companion-injected button on a Codeforces problem
-page. The publisher/name pair is never hardcoded in the companion's code —
-a small script reads them out of the packaging manifest and generates a
-small config file the companion's button script reads at runtime, so
+A `vscode://<publisher>.<name>/...` URI opens VS Code at whatever Codeforces
+page the click came from — a problem opens that problem; a contest, gym, or
+problemset page reveals it in the Explorer tree; a group page reveals it too,
+adding the group first if it wasn't already. Two triggers: a companion-
+injected button (problem pages only) and the companion's own toolbar icon
+(any codeforces.com page — the button doesn't exist on non-problem pages).
+The publisher/name pair is never hardcoded in the companion's code — a small
+script reads them out of the packaging manifest and generates a small config
+file both the button and the toolbar-icon handler read at runtime, so
 changing the publisher id is a regeneration step, not a code edit. Verified
 that the generated URI actually changes when the publisher value changes,
-and that the button's URL-building and the editor-side URL-parsing agree on
-every field via a standalone round-trip check.
+and that the companion's URL-building and the extension-side URL-parsing
+agree on every field via a standalone round-trip check.
 
-There is no page-script API that reports whether a custom URI scheme was
-actually handled by anything. The usual heuristic — did the page lose focus
-within a short window after navigating to the link; if not, treat it as
-unhandled and fall back to a plain web listing page — is what's used here.
-Known limitation: if the target application is installed but this specific
-extension isn't, the OS still switches applications (losing focus), which
-this heuristic reads as "handled" even though nothing happened. Every
-"open in app" web button that uses this pattern shares the same limitation;
-there isn't a fix available from a web page alone.
+### Focus-loss is not a "did it work" signal — first real use, again
+
+The original fallback heuristic — did the page/window lose focus within a
+short window after navigating to the vscode:// link; if not, treat it as
+unhandled — read as "unhandled" almost always in practice, not just the one
+documented edge case (extension not installed but VS Code is). Chrome's own
+"Open Visual Studio Code?" handoff for an unrecognized scheme doesn't
+reliably blur the tab or the window, so the fallback (a Marketplace tab)
+opened even on a clean, successful launch — and pre-publish, with the
+placeholder publisher id, that fallback URL was itself garbage. Silent
+success is strictly better than a spurious tab; a heuristic that can't tell
+those apart isn't worth keeping.
+
+Fixed by replacing the guess with a real signal: the click carries a random
+per-click `ackId`; the extension's URI handler reports it straight to the
+relay (`RelayServer.reportDeepLinkAck`, in-process — no HTTP hop needed on
+that side) the instant the link lands, before any slow statement fetch; the
+companion polls `GET /deeplink-ack?id=` for up to 3s before deciding to show
+the Marketplace fallback. The same poll naturally covers "VS Code isn't
+running at all" (the fetch itself fails) and "VS Code is running but this
+extension isn't" (nothing ever acks) — one mechanism, not two. Bumped
+`PROTOCOL_VERSION` since this is a new required endpoint.
 
 ## Open items
 

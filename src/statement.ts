@@ -74,6 +74,15 @@ function render(problem: Problem, detail: ProblemDetail): string {
   .io-label { color: var(--vscode-descriptionForeground); font-size: 0.75rem; }
   .io > div + div { margin-top: 0.6rem; }
   img { max-width: 100%; }
+  .cf-image-unavailable {
+    display: inline-block;
+    padding: 0.5rem 0.8rem;
+    border: 1px dashed var(--vscode-panel-border);
+    border-radius: 4px;
+    color: var(--vscode-descriptionForeground);
+    font-size: 0.85rem;
+  }
+  .cf-image-unavailable a { color: var(--vscode-textLink-foreground); }
   hr { border: none; border-top: 1px solid var(--vscode-panel-border); margin: 1.6rem 0; }
 </style>
 </head>

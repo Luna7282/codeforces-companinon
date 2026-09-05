@@ -111,8 +111,10 @@ export async function problemDetail(http: CfHttp, url: string): Promise<ProblemD
     const cacheKey = `problemDetail:${url}`;
     const cached = readCache<ProblemDetail>(cacheKey, STATEMENT_TTL);
     if (cached) {
+        http.log(`[image] problemDetail(${url}) served from the 30-day disk cache — no fetch happens this call`);
         return cached;
     }
+    http.log(`[image] problemDetail(${url}) cache miss — fetching fresh`);
     const html = await http.get(url);
     const $ = cheerio.load(html);
     const root = $('div.problem-statement').first();
@@ -140,19 +142,64 @@ export async function problemDetail(http: CfHttp, url: string): Promise<ProblemD
         .text()
         .trim();
 
-    // Statement images are relative to the contest, so make them absolute.
+    // Statement images can be root-relative, protocol-relative, or bare —
+    // the URL constructor resolves every shape against the page URL in one
+    // call, rather than special-casing each prefix.
     root.find('img').each((_, img) => {
         const src = $(img).attr('src');
-        if (src && src.startsWith('/')) {
-            $(img).attr('src', `https://codeforces.com${src}`);
+        if (src) {
+            $(img).attr('src', new URL(src, url).toString());
         }
     });
+
+    // Even absolute, most statement images (espresso.codeforces.com — the
+    // Codeforces-operated LaTeX/diagram render CDN) sit behind the same
+    // Cloudflare bot check that blocks a direct page fetch (see LESSONS.md,
+    // "Statement images"): a blocked <img src> gets an HTML challenge page
+    // back, which renders as a broken-image icon, not a 403 the extension can
+    // see. So each is fetched and inlined as a data: URI up front — same
+    // Cloudflare-fallback machinery as the page fetch itself, and it's cached
+    // baked into statementHtml, so the cost is paid once per problem.
+    await Promise.all(
+        root
+            .find('img')
+            .toArray()
+            .map(async (img) => {
+                const src = $(img).attr('src');
+                if (!src) {
+                    return;
+                }
+                try {
+                    $(img).attr('src', await http.getImageDataUri(src));
+                    http.log(`[image] ${src} ends up inlined in statementHtml`);
+                } catch (err) {
+                    // A broken-icon with no explanation is the worst outcome — replace
+                    // the img entirely with a link. VS Code webviews open a plain
+                    // https:// <a href> in the user's real browser, where the image
+                    // does load (it's only blocked in the webview's own request
+                    // contexts, not a real navigation — see LESSONS.md).
+                    http.log(`[image] ${src} shown as a link, not inlined — every fetch attempt failed: ${(err as Error).message}`);
+                    $(img).replaceWith(
+                        `<span class="cf-image-unavailable">Image unavailable in this panel — ` +
+                            `<a href="${src}">open it in your browser</a></span>`
+                    );
+                }
+            })
+    );
+
+    // "A. Two Sum" -> "Two Sum" — mirrors browser/content.js's parseProblemName,
+    // and is the one place both the deep-link-opened and the tree-opened path
+    // can get an authoritative name from (the tree already has a good one from
+    // the contest listing; a deep link may not).
+    const titleText = root.find('.header .title').first().text().trim();
+    const name = titleText.replace(/^\s*[A-Za-z0-9]+\.\s*/, '').trim() || undefined;
 
     const detail: ProblemDetail = {
         statementHtml: root.html() ?? '',
         samples,
         timeLimit: timeLimit || undefined,
-        memoryLimit: memoryLimit || undefined
+        memoryLimit: memoryLimit || undefined,
+        name
     };
     writeCache(cacheKey, detail);
     return detail;
@@ -170,4 +217,104 @@ export function parseLanguages(html: string): Language[] {
         }
     });
     return langs;
+}
+
+// The fourth src is the real value confirmed on a live problem with diagrams
+// (codeforces.com/group/nvvCsabH9U/contest/712146/problem/D) — already
+// absolute, and it's genuinely one wide image (4532x1658) covering all four
+// panels the Note text refers to as "the second image" / "the third image"
+// etc., not four separate images. It still needs inlining: Cloudflare blocks
+// a direct <img src> fetch to espresso.codeforces.com exactly like it blocks
+// a page fetch (confirmed with curl: 403, a "Just a moment" challenge page,
+// regardless of Referer — this is bot-fingerprint blocking, not hotlink
+// protection), and that challenge page (Content-Type: text/html) is what an
+// unauthenticated webview request actually gets back, hence the broken-image
+// icon rather than a picture.
+const FIXTURE_STATEMENT_HTML = `<html><body><div class="problem-statement">
+  <div class="header">
+    <div class="title">A. Two Sum</div>
+  </div>
+  <div class="time-limit"><div class="property-title">time limit per test</div>2 seconds</div>
+  <div class="memory-limit"><div class="property-title">memory limit per test</div>256 megabytes</div>
+  <p>See the diagram: <img src="/predownloaded/aa/bb/image1.png"></p>
+  <p><img src="//espresso.codeforces.com/image2.png"></p>
+  <p><img src="images/image3.png"></p>
+  <p><img src="https://espresso.codeforces.com/757752967064f2144527500c6b75d2b0d41e87d2.png"></p>
+  <p><img src="https://espresso.codeforces.com/unreachable.png"></p>
+  <div class="sample-test">
+    <div class="input"><pre>1 2</pre></div>
+    <div class="output"><pre>3</pre></div>
+  </div>
+</div></body></html>`;
+
+/** Statement parsing self-test (name extraction, image src resolution + inlining). Run: node out/scrape.js */
+export async function selfTest(): Promise<void> {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const assert: typeof import('assert') = require('assert');
+    const fetchedUrls: string[] = [];
+    const fakeHttp = {
+        get: async () => FIXTURE_STATEMENT_HTML,
+        log: () => {},
+        // Stands in for the real Cloudflare-fallback fetch — proves problemDetail
+        // asks for every resolved image, without needing real network access
+        // (or a real companion) in a fast, deterministic self-test. One URL
+        // always fails, standing in for "direct fetch, companion SW fetch, and
+        // the background-tab canvas read all failed" — the Option 3 case.
+        getImageDataUri: async (u: string) => {
+            fetchedUrls.push(u);
+            if (u.endsWith('/unreachable.png')) {
+                throw new Error('simulated: every fetch attempt failed');
+            }
+            return `data:image/png;base64,MOCK(${u})`;
+        }
+    } as unknown as CfHttp;
+
+    const pageUrl = 'https://codeforces.com/contest/1/problem/A';
+    const detail = await problemDetail(fakeHttp, pageUrl);
+
+    assert.strictEqual(detail.name, 'Two Sum', 'name stripped of the "A. " index prefix');
+    assert.strictEqual(detail.timeLimit, '2 seconds', 'time limit parsed');
+    assert.strictEqual(detail.memoryLimit, '256 megabytes', 'memory limit parsed');
+    assert.deepStrictEqual(detail.samples, [{ input: '1 2', output: '3' }], 'sample parsed');
+
+    const resolved = [
+        'https://codeforces.com/predownloaded/aa/bb/image1.png',
+        'https://espresso.codeforces.com/image2.png',
+        'https://codeforces.com/contest/1/problem/images/image3.png',
+        'https://espresso.codeforces.com/757752967064f2144527500c6b75d2b0d41e87d2.png',
+        'https://espresso.codeforces.com/unreachable.png'
+    ];
+    assert.deepStrictEqual(
+        fetchedUrls,
+        resolved,
+        'root-relative, protocol-relative, bare-relative and already-absolute src all resolve correctly before fetching'
+    );
+
+    const $ = cheerio.load(detail.statementHtml);
+    assert.strictEqual($('img').length, 4, 'the four inlineable images stay <img> tags');
+    const srcs = $('img')
+        .toArray()
+        .map((img) => $(img).attr('src'));
+    assert.deepStrictEqual(
+        srcs,
+        resolved.slice(0, 4).map((u) => `data:image/png;base64,MOCK(${u})`),
+        'every inlineable image src ends up as a data: URI, not the remote (Cloudflare-blockable) URL'
+    );
+
+    const fallback = $('.cf-image-unavailable');
+    assert.strictEqual(fallback.length, 1, 'the one URL every fetch attempt failed for gets a fallback note, not a broken <img>');
+    assert.strictEqual(
+        fallback.find('a').attr('href'),
+        'https://espresso.codeforces.com/unreachable.png',
+        'the fallback links straight to the remote image so it can still be opened in a real browser'
+    );
+
+    console.log('scrape selfTest: OK');
+}
+
+if (require.main === module) {
+    selfTest().catch((e) => {
+        console.error('scrape selfTest: FAIL\n', e);
+        process.exit(1);
+    });
 }

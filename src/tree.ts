@@ -68,6 +68,10 @@ export class CodeforcesTree implements vscode.TreeDataProvider<Node> {
         if (node.type === 'group') {
             return { type: 'section', id: 'groups', label: '' };
         }
+        if (node.type === 'problem') {
+            const p = node.problem;
+            return { type: 'contest', contest: { id: p.contestId, name: '', kind: p.kind, groupCode: p.groupCode } };
+        }
         return undefined;
     }
 
@@ -128,6 +132,7 @@ export class CodeforcesTree implements vscode.TreeDataProvider<Node> {
                 item.description = bits.join(' · ') || undefined;
                 item.iconPath = ICONS[node.state];
                 item.contextValue = 'cfProblem';
+                item.id = problemNodeId(p);
                 item.command = {
                     command: 'codeforces.openProblem',
                     title: 'Open problem',
@@ -284,6 +289,9 @@ function groupNodeId(groupCode: string): string {
 }
 function contestNodeId(contest: Contest): string {
     return `contest:${contest.kind}:${contest.groupCode ?? ''}:${contest.id}`;
+}
+function problemNodeId(problem: Problem): string {
+    return `problem:${problem.kind}:${problem.groupCode ?? ''}:${problem.contestId}:${problem.index.toUpperCase()}`;
 }
 
 function describeContest(c: Contest): string {

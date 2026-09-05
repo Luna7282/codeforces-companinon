@@ -16,7 +16,7 @@ const DEFAULT_PORT = 27121;
 // Must match PROTOCOL_VERSION in src/relay.ts. Bumped only when the wire
 // protocol changes shape — see LESSONS.md for why a mismatch must be loud,
 // not a mysterious silent failure.
-const EXPECTED_PROTOCOL_VERSION = 1;
+const EXPECTED_PROTOCOL_VERSION = 2;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Verbose tracing is off unless the "debug" option is set. Warnings/errors always show.
@@ -202,6 +202,27 @@ const isCloudflareChallenge = (status, body) =>
     (status === 403 || status === 503) &&
     /Just a moment|cf[-_]chl|cf-browser-verification|Enable JavaScript and cookies/i.test(body || '');
 
+// codeforces.com itself, or any of its subdomains (statement images live on
+// espresso.codeforces.com — see LESSONS.md, "Statement images").
+function isAllowedCodeforcesUrl(url) {
+    try {
+        const h = new URL(url).hostname;
+        return h === 'codeforces.com' || h.endsWith('.codeforces.com');
+    } catch {
+        return false;
+    }
+}
+
+function arrayBufferToBase64(buf) {
+    let binary = '';
+    const bytes = new Uint8Array(buf);
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+    }
+    return btoa(binary);
+}
+
 // Runs a real page-context fetch inside `tabId` (MAIN world → carries the tab's
 // origin, cookies, Referer and Sec-Fetch-Site: same-origin — a service-worker
 // fetch does not, and Cloudflare treats the SW request as non-browser).
@@ -245,15 +266,103 @@ async function fetchFromCodeforcesTab(url) {
     return r ? { ...r, via: 'tab-new' } : null;
 }
 
+// Statement-image fallback (see LESSONS.md "Statement images"). Three things
+// confirmed by hand, in order, before writing this:
+//  1. The service worker's own fetch (which bypasses CORS under
+//     host_permissions) also gets Cloudflare-challenged on
+//     espresso.codeforces.com — 403, text/html. TLS fingerprint alone isn't
+//     enough; Cloudflare wants page context here, same as the main site.
+//  2. A same-page `<img>`+canvas read (no fetch, so no CORS on the request
+//     itself) DOES load the image, but `canvas.toDataURL()` throws
+//     `SecurityError: Tainted canvases may not be exported` — confirmed
+//     espresso.codeforces.com sends no CORS headers, so the canvas is
+//     tainted the instant the image is cross-origin to the page.
+//  3. A genuine top-level navigation to the image URL is NOT challenged
+//     (same as visiting any codeforces.com page works) — Chrome's native
+//     image-viewer page loads the real image. Once there, the page IS
+//     espresso.codeforces.com, so the image is same-origin and
+//     `canvas.toDataURL()` succeeds untainted. Confirmed end-to-end by hand:
+//     4532x1658 image, valid `data:image/png;base64,...` out.
+// So: open the URL in a background tab, read it back via canvas from inside
+// that tab, close the tab.
+async function fetchImageViaBackgroundTab(url) {
+    const tab = await chrome.tabs.create({ url, active: false });
+    try {
+        await waitForTabComplete(tab.id);
+        const [inj] = await chrome.scripting.executeScript({
+            target: { tabId: tab.id },
+            func: async () => {
+                const img = document.querySelector('img');
+                if (!img) {
+                    return { ok: false, error: 'no <img> on the navigated page — not an image response' };
+                }
+                const deadline = Date.now() + 5000;
+                while (!(img.complete && img.naturalWidth > 0) && Date.now() < deadline) {
+                    await new Promise((r) => setTimeout(r, 100));
+                }
+                if (!(img.complete && img.naturalWidth > 0)) {
+                    return { ok: false, error: 'image never finished loading' };
+                }
+                try {
+                    const canvas = document.createElement('canvas');
+                    canvas.width = img.naturalWidth;
+                    canvas.height = img.naturalHeight;
+                    canvas.getContext('2d').drawImage(img, 0, 0);
+                    const dataUrl = canvas.toDataURL('image/png');
+                    return { ok: true, contentType: 'image/png', base64: dataUrl.slice(dataUrl.indexOf(',') + 1) };
+                } catch (e) {
+                    return { ok: false, error: `${e.name}: ${e.message}` };
+                }
+            }
+        });
+        return (inj && inj.result) || { ok: false, error: 'executeScript returned no result' };
+    } catch (e) {
+        return { ok: false, error: String((e && e.message) || e) };
+    } finally {
+        chrome.tabs.remove(tab.id).catch(() => {});
+    }
+}
+
 // 'fetch' job: GET the URL in the browser and hand the HTML back to the extension.
-// Fast path: service-worker fetch. On a Cloudflare challenge, retry from a tab.
+// Fast path: service-worker fetch. On a Cloudflare challenge, text jobs retry
+// from an existing codeforces.com tab (same-origin fetch, no CORS); binary
+// (image) jobs retry via fetchImageViaBackgroundTab instead — see the block
+// comment above for why the two fallbacks can't share a strategy.
 async function handleFetch(port, token, job) {
     let status = 0;
     let body = '';
+    let contentType = '';
     let via = 'sw';
 
-    if (!/^https:\/\/codeforces\.com\//.test(job.url)) {
+    if (!isAllowedCodeforcesUrl(job.url)) {
         body = 'refusing non-codeforces URL: ' + job.url;
+    } else if (job.binary) {
+        try {
+            const r = await fetch(job.url, { credentials: 'include', redirect: 'follow' });
+            status = r.status;
+            contentType = r.headers.get('content-type') || '';
+            if (contentType.startsWith('image/')) {
+                body = arrayBufferToBase64(await r.arrayBuffer());
+            }
+        } catch (e) {
+            status = 0;
+            contentType = '';
+        }
+        if (!contentType.startsWith('image/')) {
+            log('SW image fetch did not return image bytes; trying a background-tab navigation', job.url, status, contentType);
+            const tabRes = await fetchImageViaBackgroundTab(job.url);
+            if (tabRes.ok) {
+                status = 200;
+                contentType = tabRes.contentType;
+                body = tabRes.base64;
+                via = 'tab-canvas';
+            } else {
+                log('background-tab image fetch failed', job.url, tabRes.error);
+                status = 0;
+                body = tabRes.error;
+                contentType = '';
+            }
+        }
     } else {
         try {
             const r = await fetch(job.url, { credentials: 'include', redirect: 'follow' });
@@ -277,9 +386,9 @@ async function handleFetch(port, token, job) {
     await fetch(`http://127.0.0.1:${port}/result`, {
         method: 'POST',
         headers: { 'X-Relay-Token': token, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: job.id, status, body })
+        body: JSON.stringify({ id: job.id, status, body, contentType })
     }).catch(() => {});
-    log('fetched', job.url, 'via', via, '->', status, (body || '').length, 'bytes');
+    log('fetched', job.url, 'via', via, '->', status, (body || '').length, job.binary ? `b64 chars (${contentType})` : 'chars');
 }
 
 // --- keepalive + poll loop ----------------------------------------------------
@@ -419,7 +528,8 @@ log('worker eval: calling pollLoop() now');
 pollLoop('startup');
 log('worker eval: end of script');
 
-// --- toolbar icon: context-aware "open this in VS Code" -----------------------
+// --- "open this in VS Code": toolbar icon (any page) + in-page button (problem
+// pages, content.js) both funnel through here. --------------------------------
 // Unlike the in-page button (content.js, problem pages only), the toolbar icon
 // fires on any codeforces.com page, so it needs its own URL classification —
 // same regexes as content.js's parseProblemRef, extended to contest/gym/group
@@ -465,47 +575,78 @@ function classifyCodeforcesUrl(url) {
     return null;
 }
 
-function buildDeepLinkUri(ref) {
+function buildDeepLinkUri(ref, ackId) {
     if (typeof CF_DEEPLINK === 'undefined') {
         return null;
     }
+    let path;
+    const params = new URLSearchParams();
     if (ref.type === 'problem') {
-        const params = new URLSearchParams({ kind: ref.kind, contestId: String(ref.contestId), index: ref.index });
+        path = '/openProblem';
+        params.set('kind', ref.kind);
+        params.set('contestId', String(ref.contestId));
+        params.set('index', ref.index);
+        if (ref.name) params.set('name', ref.name);
         if (ref.groupCode) params.set('groupCode', ref.groupCode);
-        return `${CF_DEEPLINK.uriBase}/openProblem?${params.toString()}`;
-    }
-    if (ref.type === 'contest') {
-        const params = new URLSearchParams({ kind: ref.kind, contestId: String(ref.contestId) });
+    } else if (ref.type === 'contest') {
+        path = '/openContest';
+        params.set('kind', ref.kind);
+        params.set('contestId', String(ref.contestId));
         if (ref.groupCode) params.set('groupCode', ref.groupCode);
-        return `${CF_DEEPLINK.uriBase}/openContest?${params.toString()}`;
+    } else if (ref.type === 'group') {
+        path = '/openGroup';
+        params.set('groupCode', ref.groupCode);
+    } else if (ref.type === 'problemset') {
+        path = '/openProblemset';
+    } else {
+        return null;
     }
-    if (ref.type === 'group') {
-        return `${CF_DEEPLINK.uriBase}/openGroup?${new URLSearchParams({ groupCode: ref.groupCode }).toString()}`;
-    }
-    if (ref.type === 'problemset') {
-        return `${CF_DEEPLINK.uriBase}/openProblemset`;
-    }
-    return null;
+    params.set('ackId', ackId);
+    return `${CF_DEEPLINK.uriBase}${path}?${params.toString()}`;
 }
 
-// Same custom-scheme-with-fallback heuristic as content.js, adapted for a
-// service worker (no `document`/`window`): if the OS hands off to VS Code,
-// Chrome itself loses focus. Navigating the clicked tab (not a new one) means
-// a *handled* link never disturbs the page — Chrome intercepts the scheme
-// before committing any navigation, same as the existing in-page button.
-async function openInVsCode(tab, uri) {
-    let lostFocus = false;
-    const onFocusChanged = (windowId) => {
-        if (windowId === chrome.windows.WINDOW_ID_NONE) lostFocus = true;
-    };
-    chrome.windows.onFocusChanged.addListener(onFocusChanged);
-    try {
-        await chrome.tabs.update(tab.id, { url: uri });
-        await sleep(1500);
-    } finally {
-        chrome.windows.onFocusChanged.removeListener(onFocusChanged);
+// The old heuristic here (and in content.js, before this version) guessed
+// success from window/tab focus loss — but Chrome's "Open Visual Studio
+// Code?" handoff doesn't reliably blur anything, so it read as "unhandled"
+// even on a clean open, popping a spurious (and, pre-publish, broken-URL)
+// Marketplace tab every time. Real signal instead: the extension's URI
+// handler acks a per-click id straight to the relay the instant it lands
+// (see LESSONS.md, "Deep link"), so this polls for that ack rather than
+// guessing. No relay reachable at all (VS Code not running) fails the same
+// poll, so one mechanism covers "VS Code not installed" and "not running".
+const ACK_POLL_INTERVAL_MS = 300;
+const ACK_POLL_TIMEOUT_MS = 3000;
+
+async function wasDeepLinkAcked(port, token, ackId) {
+    const deadline = Date.now() + ACK_POLL_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+        try {
+            const res = await fetch(`http://127.0.0.1:${port}/deeplink-ack?id=${encodeURIComponent(ackId)}`, {
+                headers: { 'X-Relay-Token': token }
+            });
+            if (res.ok) {
+                const j = await res.json();
+                if (j && j.acked) return true;
+            }
+        } catch {
+            // relay unreachable — VS Code isn't running; keep polling until the timeout,
+            // it may still start (a fresh vscode:// launch takes a moment).
+        }
+        await sleep(ACK_POLL_INTERVAL_MS);
     }
-    if (!lostFocus) {
+    return false;
+}
+
+async function openInVsCode(tab, ref) {
+    const { port, token } = await config();
+    const ackId = crypto.randomUUID();
+    const uri = buildDeepLinkUri(ref, ackId);
+    if (!uri || !tab || !tab.id) {
+        return;
+    }
+    await chrome.tabs.update(tab.id, { url: uri });
+    const acked = await wasDeepLinkAcked(port, token, ackId);
+    if (!acked) {
         await chrome.tabs.create({ url: CF_DEEPLINK.marketplaceUrl, active: true });
     }
 }
@@ -518,9 +659,15 @@ chrome.action.onClicked.addListener((tab) => {
     if (!ref) {
         return; // not a page this can do anything with
     }
-    const uri = buildDeepLinkUri(ref);
-    if (!uri) {
+    openInVsCode(tab, ref).catch((e) => console.error('[cf-relay] toolbar deep link failed', e));
+});
+
+// content.js's "Open in VS Code" button (problem pages) sends its ref here
+// instead of navigating/detecting itself, so both entry points share the
+// same ack-based success check.
+chrome.runtime.onMessage.addListener((msg, sender) => {
+    if (!msg || msg.type !== 'openInVsCode' || !sender.tab) {
         return;
     }
-    openInVsCode(tab, uri).catch((e) => console.error('[cf-relay] toolbar deep link failed', e));
+    openInVsCode(sender.tab, msg.ref).catch((e) => console.error('[cf-relay] in-page deep link failed', e));
 });

@@ -52,10 +52,14 @@ one-click "re-pair" notification instead of failing silently.
 On any Codeforces problem page (contest, gym, group, or problemset) this
 companion adds a small **Open in VS Code** button (bottom-right). Clicking it
 opens `vscode://<publisher>.<name>/openProblem?...` with that problem's
-reference — VS Code scaffolds the file, loads the statement, and focuses the
-editor. If nothing handles the link (VS Code, or this extension, isn't
-installed) it falls back to the Marketplace listing after ~1.5 s. The
-publisher/name are never hardcoded here — see **Packaging**, below.
+reference — VS Code scaffolds the file, loads the statement (with the real
+title, parsed off the statement page — see `../LESSONS.md`), and focuses the
+editor, plus reveals it in the Explorer tree. Success is silent: the button
+navigates the tab and asks the relay whether the link actually landed
+(a per-click id the extension acks the instant it does); only if nothing
+acks within ~3s — VS Code isn't running, or isn't installed — does it fall
+back to the Marketplace listing. The publisher/name are never hardcoded
+here — see **Packaging**, below.
 
 If nothing happens: run **Codeforces: Check companion** in VS Code — it says
 whether the companion is polling, asleep, token-rejected, or absent. Also check

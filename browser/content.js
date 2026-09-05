@@ -34,43 +34,17 @@
         return el.textContent.replace(/^\s*[A-Za-z0-9]+\.\s*/, '').trim();
     }
 
-    // Custom-scheme-with-fallback: no API tells a page whether a vscode:// link
-    // was actually handled. The usual heuristic — did the page lose focus
-    // within a short window — is what's used here; it can't tell "VS Code
-    // opened but this extension isn't installed" from "it worked" (the OS
-    // still switches apps either way), so that one case won't show the
-    // fallback. Everything else (VS Code not installed at all) is caught.
+    // Delegates to the service worker (background.js), which navigates this
+    // tab to the vscode:// link and polls the relay for a real ack instead of
+    // guessing from focus/visibility — a page losing focus for a Chrome
+    // protocol-handoff prompt isn't a reliable "it worked" signal (see
+    // LESSONS.md, "Deep link"), and it can't tell a placeholder publisher id
+    // apart from a real one either.
     function openInVsCode(ref) {
         if (typeof CF_DEEPLINK === 'undefined') {
             return; // deeplink-config.js failed to load — nothing sensible to do
         }
-        const params = new URLSearchParams({
-            kind: ref.kind,
-            contestId: String(ref.contestId),
-            index: ref.index,
-            name: ref.name || ''
-        });
-        if (ref.groupCode) {
-            params.set('groupCode', ref.groupCode);
-        }
-        const uri = `${CF_DEEPLINK.uriBase}/openProblem?${params.toString()}`;
-
-        let handled = false;
-        const markHandled = () => {
-            handled = true;
-        };
-        document.addEventListener('visibilitychange', markHandled, { once: true });
-        window.addEventListener('blur', markHandled, { once: true });
-
-        window.location.href = uri;
-
-        setTimeout(() => {
-            document.removeEventListener('visibilitychange', markHandled);
-            window.removeEventListener('blur', markHandled);
-            if (!handled) {
-                window.open(CF_DEEPLINK.marketplaceUrl, '_blank', 'noopener');
-            }
-        }, 1500);
+        chrome.runtime.sendMessage({ type: 'openInVsCode', ref });
     }
 
     function injectButton(ref) {
@@ -89,7 +63,7 @@
             'font:600 13px system-ui,sans-serif', 'cursor:pointer',
             'box-shadow:0 2px 8px rgba(0,0,0,.35)'
         ].join(';');
-        btn.addEventListener('click', () => openInVsCode({ ...ref, name: parseProblemName() }));
+        btn.addEventListener('click', () => openInVsCode({ type: 'problem', ...ref, name: parseProblemName() }));
         document.body.appendChild(btn);
     }
 

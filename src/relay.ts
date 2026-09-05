@@ -41,6 +41,10 @@ export interface SubmitJob extends JobCommon {
 export interface FetchJob extends JobCommon {
     type: 'fetch';
     url: string;
+    /** Statement images: Cloudflare blocks these the same way it blocks page reads
+     *  (see LESSONS.md, "Statement images"), so the companion base64-encodes the
+     *  raw bytes instead of reading the response as text. */
+    binary?: boolean;
 }
 
 export type RelayJob = SubmitJob | FetchJob;
@@ -49,6 +53,9 @@ export type SubmitJobInput = Omit<SubmitJob, 'id' | 'createdAt' | 'type'>;
 export interface RelayFetchResult {
     status: number;
     body: string;
+    /** Set by the companion for a binary fetch — lets the caller tell real image
+     *  bytes apart from an HTML Cloudflare challenge page (same status, wrong type). */
+    contentType?: string;
 }
 
 /**
@@ -57,7 +64,7 @@ export interface RelayFetchResult {
  * companion checks this against its own copy on every /health hit — see
  * LESSONS.md for why a version mismatch must never fail silently.
  */
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 // Under LONG_POLL_MS the companion reconnects before Chrome's ~30s MV3 idle
 // suspend can bite; a returned poll still refreshes lastPollAt inside
@@ -81,6 +88,9 @@ export class RelayServer {
     private everPolled = false;
     private submitOutcomes = new Map<string, { outcome: string; message?: string; at: number }>();
     private lastCompanionError: { message: string; at: number } | undefined;
+    /** ackId -> reported-at. Lets the companion detect "VS Code actually opened this" instead
+     *  of guessing from window focus (see LESSONS.md, "Deep link" — the focus heuristic lies). */
+    private deepLinkAcks = new Map<string, number>();
 
     /**
      * @param token          shared secret every request must present, as `X-Relay-Token: <token>`
@@ -96,6 +106,16 @@ export class RelayServer {
         private readonly log: (msg: string) => void = () => {},
         private readonly onAuthRejected: () => void = () => {}
     ) {}
+
+    /** Called by the extension's URI handler the instant a deep link lands. */
+    reportDeepLinkAck(id: string): void {
+        this.deepLinkAcks.set(id, Date.now());
+        for (const [k, at] of this.deepLinkAcks) {
+            if (Date.now() - at > 30_000) {
+                this.deepLinkAcks.delete(k);
+            }
+        }
+    }
 
     get running(): boolean {
         return Boolean(this.server);
@@ -200,7 +220,7 @@ export class RelayServer {
      * Rejects with `companion-offline` (nothing polling), `companion-auth`
      * (polling but token rejected), or `companion-timeout` (no answer in time).
      */
-    fetchViaCompanion(url: string): Promise<RelayFetchResult> {
+    fetchViaCompanion(url: string, binary?: boolean): Promise<RelayFetchResult> {
         if (!this.companionOnline) {
             const reason = this.companionStatus === 'auth-rejected' ? 'companion-auth' : 'companion-offline';
             return Promise.reject(new Error(reason));
@@ -208,6 +228,7 @@ export class RelayServer {
         const job: FetchJob = {
             type: 'fetch',
             url,
+            binary,
             id: crypto.randomBytes(8).toString('hex'),
             createdAt: Date.now()
         };
@@ -312,6 +333,13 @@ export class RelayServer {
             return;
         }
 
+        if (req.method === 'GET' && route === '/deeplink-ack') {
+            const id = new URLSearchParams((req.url ?? '').split('?')[1] ?? '').get('id') ?? '';
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ acked: this.deepLinkAcks.has(id) }));
+            return;
+        }
+
         if (req.method === 'POST' && route === '/ack') {
             this.readBody(req, (body) => {
                 const id = safeField(body, 'id');
@@ -376,7 +404,7 @@ export class RelayServer {
     }
 
     private deliverFetchResult(body: string): void {
-        let parsed: { id?: unknown; status?: unknown; body?: unknown };
+        let parsed: { id?: unknown; status?: unknown; body?: unknown; contentType?: unknown };
         try {
             parsed = JSON.parse(body);
         } catch {
@@ -395,7 +423,8 @@ export class RelayServer {
         this.removeJob(id);
         pending.resolve({
             status: typeof parsed.status === 'number' ? parsed.status : 0,
-            body: typeof parsed.body === 'string' ? parsed.body : ''
+            body: typeof parsed.body === 'string' ? parsed.body : '',
+            contentType: typeof parsed.contentType === 'string' ? parsed.contentType : undefined
         });
     }
 
@@ -543,6 +572,17 @@ export async function selfTest(): Promise<void> {
             body: JSON.stringify({ message: 'protocol mismatch: companion=1 relay=2' })
         });
         assert.strictEqual(srv.companionError, 'protocol mismatch: companion=1 relay=2', 'companion error recorded');
+
+        // deep-link ack: the companion's success signal, not a focus-loss guess
+        const ackBody = (id: string) =>
+            fetch(base + `/deeplink-ack?id=${id}`, { headers: { 'X-Relay-Token': TOKEN } }).then(
+                (r) => r.json() as Promise<{ acked: boolean }>
+            );
+        assert.strictEqual((await ackBody('never-reported')).acked, false, 'unknown ackId not acked');
+        assert.strictEqual(await status('/deeplink-ack?id=x'), 401, '/deeplink-ack still needs a token');
+        srv.reportDeepLinkAck('click-1');
+        assert.strictEqual((await ackBody('click-1')).acked, true, 'reported ackId comes back acked');
+        assert.strictEqual((await ackBody('click-2')).acked, false, 'a different ackId stays un-acked');
 
         console.log('relay auth selfTest: OK');
     } finally {

@@ -95,6 +95,7 @@ function loadOrCreateRelayToken(context: vscode.ExtensionContext): string {
 
 export function activate(context: vscode.ExtensionContext): void {
     session = new Session(context.secrets);
+    session.http.setLogger((m) => dbg(m));
     api = new CodeforcesApi(session.http);
     tree = new CodeforcesTree(
         session,
@@ -162,7 +163,7 @@ export function activate(context: vscode.ExtensionContext): void {
         .start(relayPort)
         .then(() => {
             // Reads fall back to the companion when Cloudflare blocks direct Node fetch.
-            session.http.setRelayFetcher((u) => relay!.fetchViaCompanion(u));
+            session.http.setRelayFetcher((u, binary) => relay!.fetchViaCompanion(u, binary));
         })
         .catch((err) => {
             void vscode.window.showWarningMessage(
@@ -182,6 +183,18 @@ export function activate(context: vscode.ExtensionContext): void {
             tree.refresh();
             forceRebuild();
             archiveView?.refresh();
+        }),
+        // Refresh above already clears this same disk cache (statements included —
+        // see LESSONS.md, "Statement images"); this is a dedicated, visible action
+        // for when the cache itself is the thing being debugged, since Refresh's
+        // effect is otherwise silent and easy to mistake for "did nothing".
+        vscode.commands.registerCommand('codeforces.clearCache', () => {
+            clearCache();
+            api.invalidate();
+            void vscode.window.showInformationMessage(
+                'Codeforces: cache cleared. Re-open any already-open problem to re-fetch its statement — ' +
+                    'clearing the cache does not refresh a panel that is already showing one.'
+            );
         }),
         vscode.commands.registerCommand('codeforces.login', login),
         vscode.commands.registerCommand('codeforces.importSession', importSession),
@@ -864,6 +877,14 @@ async function revealNode(node: CodeforcesNode): Promise<void> {
 async function handleDeepLink(uri: vscode.Uri): Promise<void> {
     const q = new URLSearchParams(uri.query);
 
+    // The companion's fallback-to-Marketplace decision hinges on this landing
+    // here at all — ack immediately, before any slow statement fetch, so a
+    // successful open never races the companion's short poll window.
+    const ackId = q.get('ackId');
+    if (ackId) {
+        relay?.reportDeepLinkAck(ackId);
+    }
+
     if (uri.path === '/openProblem') {
         const kind = q.get('kind');
         const contestId = Number(q.get('contestId'));
@@ -880,6 +901,7 @@ async function handleDeepLink(uri: vscode.Uri): Promise<void> {
             groupCode: q.get('groupCode') || undefined
         };
         await openProblem(problem);
+        await revealNode({ type: 'problem', problem, state: 'untouched', attempts: 0 });
         return;
     }
 
@@ -924,6 +946,11 @@ async function openProblem(problem: Problem): Promise<void> {
             { location: vscode.ProgressLocation.Window, title: `Loading ${problem.index}` },
             () => problemDetail(session.http, problemUrl(problem))
         );
+        // The statement page's own title is authoritative — a deep link from
+        // the companion may only have carried the index (see LESSONS.md).
+        if (detail.name) {
+            problem = { ...problem, name: detail.name };
+        }
         // Preserve any custom tests / attempt history already stored for this problem.
         const prev = readMeta(solutionPath(problem));
         const meta: ProblemMeta = {

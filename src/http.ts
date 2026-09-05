@@ -35,8 +35,9 @@ export interface CookieRecord {
 export interface RelayFetchResult {
     status: number;
     body: string;
+    contentType?: string;
 }
-export type RelayFetcher = (url: string) => Promise<RelayFetchResult>;
+export type RelayFetcher = (url: string, binary?: boolean) => Promise<RelayFetchResult>;
 
 export class CfHttp {
     private cookies: CookieRecord = {};
@@ -44,8 +45,18 @@ export class CfHttp {
     private readonly limiter = new RateLimiter(1100);
     private relayFetcher: RelayFetcher | undefined;
     private relayLatched = false;
+    private logger: (msg: string) => void = () => {};
 
     constructor(private readonly onCookieChange: (c: CookieRecord) => void = () => {}) {}
+
+    /** Wired to the Codeforces output channel (only visible with codeforces.debug on). */
+    setLogger(fn: (msg: string) => void): void {
+        this.logger = fn;
+    }
+
+    log(msg: string): void {
+        this.logger(msg);
+    }
 
     /**
      * Register a transport that fetches a URL through the companion browser
@@ -227,6 +238,62 @@ export class CfHttp {
             throw new Error(`GET ${url} via companion returned ${out.status}`);
         }
         return out.body;
+    }
+
+    /**
+     * Fetches image bytes and returns them as a `data:` URI, for inlining into
+     * the statement webview. Cloudflare blocks these exactly like it blocks
+     * page reads (see LESSONS.md, "Statement images") — a blocked response
+     * comes back with `Content-Type: text/html` (a challenge page), same
+     * status as a real image in some cases, so success is judged by content
+     * type, never status code alone.
+     */
+    async getImageDataUri(url: string): Promise<string> {
+        this.log(`[image] getImageDataUri(${url})`);
+        if (this.relayLatched && this.relayFetcher) {
+            this.log(`[image] relay already latched from an earlier block this session — skipping straight to companion`);
+            return this.imageViaRelay(url);
+        }
+        try {
+            return await this.limiter.run(async () => {
+                const res = await fetch(url, { headers: this.headers(), redirect: 'follow' });
+                const contentType = res.headers.get('content-type') ?? '';
+                this.log(`[image] direct fetch ${url} -> status=${res.status} content-type=${contentType || 'none'}`);
+                if (!res.ok || !contentType.startsWith('image/')) {
+                    throw new Error(
+                        `GET ${url} did not return an image (status ${res.status}, content-type ${contentType || 'none'})`
+                    );
+                }
+                const buf = Buffer.from(await res.arrayBuffer());
+                this.log(`[image] direct fetch succeeded for ${url} (${buf.length} bytes) — inlined without the companion`);
+                return `data:${contentType};base64,${buf.toString('base64')}`;
+            });
+        } catch (err) {
+            this.log(`[image] direct fetch failed for ${url}: ${(err as Error).message}`);
+            if (this.relayFetcher) {
+                this.relayLatched = true;
+                this.log(`[image] falling back to the companion for ${url}`);
+                return this.imageViaRelay(url);
+            }
+            this.log(`[image] no companion registered — giving up on ${url}`);
+            throw err;
+        }
+    }
+
+    private async imageViaRelay(url: string): Promise<string> {
+        const out = await this.relayFetcher!(url, true);
+        this.log(
+            `[image] companion fetch ${url} -> status=${out.status} content-type=${out.contentType || 'none'} ` +
+                `bodyLen=${out.body.length}`
+        );
+        const contentType = out.contentType ?? '';
+        if (out.status < 200 || out.status >= 400 || !contentType.startsWith('image/')) {
+            throw new Error(
+                `GET ${url} via companion did not return an image (status ${out.status}, content-type ${contentType || 'none'})`
+            );
+        }
+        this.log(`[image] companion fetch succeeded for ${url} — inlined`);
+        return `data:${contentType};base64,${out.body}`;
     }
 
     async getJson<T>(url: string): Promise<T> {
