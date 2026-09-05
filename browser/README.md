@@ -1,4 +1,6 @@
-# Codeforces Inline — submit relay (companion Chrome extension)
+# Inline for Codeforces — submit relay (companion Chrome extension)
+
+*Unofficial. Not affiliated with, endorsed by, or sponsored by Codeforces.*
 
 Codeforces guards the submit form with a Cloudflare **Turnstile** challenge that
 a headless POST can't satisfy (see `../LESSONS.md`, 2026-09-04). So the VS Code

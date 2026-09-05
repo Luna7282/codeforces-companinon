@@ -1,10 +1,14 @@
-# Privacy practices — Codeforces Inline relay
+# Privacy practices — Inline for Codeforces relay
+
+*Unofficial. Not affiliated with, endorsed by, or sponsored by Codeforces.*
 
 For the Chrome Web Store's "Privacy practices" tab. This extension talks to
 exactly two hosts and nothing else: **`127.0.0.1`** (the paired VS Code
-extension, on the port you configure) and **`codeforces.com`**. It has no
-analytics, no third-party requests, no remote config, and stores nothing
-outside your machine. See `../LESSONS.md` for the full background on why it exists.
+extension, on the port you configure) and **`codeforces.com`, including its
+subdomains** (statement images are served from `espresso.codeforces.com`, a
+Codeforces-operated CDN host, not a third party). It has no analytics, no
+third-party requests, no remote config, and stores nothing outside your
+machine. See `../LESSONS.md` for the full background on why it exists.
 
 ## Single purpose
 
@@ -37,14 +41,18 @@ else. Concretely:
   available grant, scoped down entirely by the token at the application
   layer.
 
-### `host_permissions: https://codeforces.com/*` — will also draw scrutiny
+### `host_permissions: https://codeforces.com/*`, `https://*.codeforces.com/*` — will also draw scrutiny
 
 Needed to read Codeforces pages (statements, group listings, the submit form,
-the status page) as a normal logged-in request, and to fill the submit form.
-No other site is ever navigated to or read. The extension does not modify,
-delete, or exfiltrate anything from the user's Codeforces account beyond
-what the user's own VS Code extension explicitly requested (a specific URL to
-read, or a specific submission to fill in) — see `scripting` below for the
+the status page) as a normal logged-in request, to fill the submit form, and
+to fetch statement-image bytes from `espresso.codeforces.com` (Codeforces's
+own CDN subdomain — Cloudflare blocks this exactly like it blocks page reads,
+so the same companion-relay path is used, base64-encoding the image instead
+of reading it as text). No other site is ever navigated to, read, or
+fetched. The extension does not modify, delete, or exfiltrate anything from
+the user's Codeforces account beyond what the user's own VS Code extension
+explicitly requested (a specific URL to read, or a specific submission to
+fill in) — see `scripting` below for the
 one thing it writes.
 
 ### `scripting`

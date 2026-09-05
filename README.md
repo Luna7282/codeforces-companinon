@@ -1,4 +1,6 @@
-# Codeforces Inline
+# Inline for Codeforces
+
+*Unofficial. Not affiliated with, endorsed by, or sponsored by Codeforces.*
 
 Browse contests, gyms, and group contests, read statements, run samples, submit, and keep a searchable local history of every attempt — without leaving VS Code.
 
@@ -179,4 +181,4 @@ The extension talks to `codeforces.com` and (for the companion pairing) `127.0.0
 
 ## License
 
-MIT — see `LICENSE`.
+GPL-3.0-or-later — see `LICENSE`. In short, for anyone forking this: if you distribute a modified version, it must also be open source under the GPL.

@@ -22,6 +22,7 @@ All notable changes to Codeforces Inline and its companion browser extension.
 
 ### Packaging
 - Extension icon, `LICENSE`, `repository`/`bugs` links, keywords, removed the stray `private: true`.
+- Switched license from MIT to **GPL-3.0-or-later** (`LICENSE`, `package.json`).
 - Fixed `.vscodeignore` — it wasn't excluding generated solution folders or the `dist/` build output, so every previous `.vsix` shipped whatever was in your workspace alongside the extension. Neither was ever published; still, fixed.
 - **Placeholders you must fill in before publishing** — see the note at the end of this file.
 

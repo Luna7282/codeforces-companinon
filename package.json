@@ -1,11 +1,11 @@
 {
   "name": "codeforces-inline",
-  "displayName": "Codeforces Inline",
-  "description": "Browse, solve and submit Codeforces contests, gyms and group contests without leaving VS Code.",
+  "displayName": "Inline for Codeforces",
+  "description": "Browse, solve and submit Codeforces contests, gyms and group contests without leaving VS Code. Unofficial. Not affiliated with, endorsed by, or sponsored by Codeforces.",
   "version": "0.2.0",
   "publisher": "replace-with-your-publisher-id",
   "icon": "media/icon.png",
-  "license": "MIT",
+  "license": "GPL-3.0-or-later",
   "repository": {
     "type": "git",
     "url": "https://github.com/replace-with-your-org/replace-with-your-repo.git"
