@@ -46,6 +46,6 @@ publish:
 
 - `package.json`: `"publisher": "replace-with-your-publisher-id"` — register one at https://marketplace.visualstudio.com/manage, then update this and re-run `npm run gen:companion-config` (the companion's deep link is derived from it).
 - `package.json`: `"repository"` / `"bugs"` URLs — currently `https://github.com/replace-with-your-org/replace-with-your-repo(...)`.
-- `media/icon.png` — a placeholder flat mark generated for this pass, not real branding. Replace with real artwork (128×128 PNG minimum).
 - Screenshots — marked `<!-- TODO -->` in `README.md`; add real ones from a live run (sidebar+statement+Results panel, and the Archive view).
+- Chrome Web Store **long description** (entered in the developer dashboard at publish time, not a repo file) — add the "Unofficial. Not affiliated with, endorsed by, or sponsored by Codeforces." line there. `browser/manifest.json`'s `description` is capped by Chrome at 132 characters (rejected an upload at 369) and should say only what the extension does, nothing else.
 - After changing the publisher: `npm run gen:companion-config`, then `npm run build:companion` for a fresh companion zip.

@@ -30,10 +30,9 @@ says what a pass looks like and the failure you're most likely to hit.
 > ✓ Verified against live Codeforces — 2026-09-04.
 
 - `chrome://extensions` → toggle **Developer mode** on → **Load unpacked** → in
-  the dialog, open the **`browser`** subfolder itself
-  (`D:\codeforce-extension\cf-vscode\browser`) and select that — not the repo
-  root.
-- **Working:** a "Codeforces Inline — submit relay" card appears, no errors, and
+  the dialog, open the repo's **`browser`** subfolder itself and select that —
+  not the repo root.
+- **Working:** an "Inline for Codeforces — submit relay" card appears, no errors, and
   *Inspect views: service worker* is a clickable link.
 - **Likely failure:** "Manifest file is missing or unreadable / Could not load
   manifest" with a path ending in `cf-vscode` (not `cf-vscode\browser`) — you

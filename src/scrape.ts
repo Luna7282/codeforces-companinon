@@ -219,9 +219,9 @@ export function parseLanguages(html: string): Language[] {
     return langs;
 }
 
-// The fourth src is the real value confirmed on a live problem with diagrams
-// (codeforces.com/group/nvvCsabH9U/contest/712146/problem/D) — already
-// absolute, and it's genuinely one wide image (4532x1658) covering all four
+// The fourth src is the real value confirmed on a live group-contest problem
+// with diagrams — already absolute, and it's genuinely one wide image
+// (4532x1658) covering all four
 // panels the Note text refers to as "the second image" / "the third image"
 // etc., not four separate images. It still needs inlining: Cloudflare blocks
 // a direct <img src> fetch to espresso.codeforces.com exactly like it blocks

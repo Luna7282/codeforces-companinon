@@ -2,13 +2,14 @@
 
 *Unofficial. Not affiliated with, endorsed by, or sponsored by Codeforces.*
 
-For the Chrome Web Store's "Privacy practices" tab. This extension talks to
-exactly two hosts and nothing else: **`127.0.0.1`** (the paired VS Code
-extension, on the port you configure) and **`codeforces.com`, including its
-subdomains** (statement images are served from `espresso.codeforces.com`, a
-Codeforces-operated CDN host, not a third party). It has no analytics, no
-third-party requests, no remote config, and stores nothing outside your
-machine. See `../LESSONS.md` for the full background on why it exists.
+This extension talks to exactly two hosts and nothing else: **`127.0.0.1`**
+(the paired VS Code extension, on the port you configure) and
+**`codeforces.com`, including its subdomains** (statement images are served
+from `espresso.codeforces.com`, a Codeforces-operated CDN host, not a third
+party). It has no analytics, no third-party requests, no remote config, and
+stores nothing outside your machine. See
+[`LESSONS.md`](https://github.com/Luna7282/inline-for-codeforces/blob/main/LESSONS.md)
+for the full background on why it exists.
 
 ## Single purpose
 
@@ -20,9 +21,9 @@ result to the VS Code extension over localhost. It does not submit anything
 by itself — you always complete the Cloudflare challenge and click Submit
 yourself.
 
-## Permission justification
+## Why each permission is needed
 
-### `host_permissions: http://127.0.0.1/*` — will draw review scrutiny
+### Localhost access (`http://127.0.0.1/*`)
 
 This is the pairing channel to the user's own VS Code extension, nothing
 else. Concretely:
@@ -41,7 +42,7 @@ else. Concretely:
   available grant, scoped down entirely by the token at the application
   layer.
 
-### `host_permissions: https://codeforces.com/*`, `https://*.codeforces.com/*` — will also draw scrutiny
+### Codeforces access (`https://codeforces.com/*`, `https://*.codeforces.com/*`)
 
 Needed to read Codeforces pages (statements, group listings, the submit form,
 the status page) as a normal logged-in request, to fill the submit form, and
@@ -83,10 +84,9 @@ leaves the machine.
 
 ### `alarms`
 
-Chrome suspends an idle MV3 service worker after ~30 s. A periodic alarm (the
-Chrome-enforced minimum interval, 1 minute) wakes it so it keeps polling the
-local relay. No data is read or sent by the alarm itself — it only calls the
-existing poll function.
+Chrome suspends an idle MV3 service worker after ~30 s. A periodic alarm,
+once a minute, wakes it so it keeps polling the local relay. No data is read
+or sent by the alarm itself — it only calls the existing poll function.
 
 ### Content script (auto-injected on Codeforces problem pages)
 
@@ -105,3 +105,10 @@ it, opens the Marketplace listing in a new tab.
 None. No analytics SDK, no error reporting service, no remote logging. The
 only network destinations are the two hosts above, and the only persisted
 data is the three `storage` values a user typed in themselves.
+
+## Limited Use disclosure
+
+This extension does not use any Google API. Required on this page regardless:
+
+The use of information received from Google APIs will adhere to the Chrome
+Web Store User Data Policy, including the Limited Use requirements.

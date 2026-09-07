@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Inline for Codeforces — submit relay",
   "version": "0.2.0",
-  "description": "Companion for the Inline for Codeforces VS Code extension. Reads Codeforces pages and fills the submit form from your logged-in browser tab, since Codeforces blocks the extension's own requests. Talks only to 127.0.0.1 and codeforces.com (including its subdomains, e.g. the statement-image CDN). Unofficial. Not affiliated with, endorsed by, or sponsored by Codeforces.",
+  "description": "Companion for Inline for Codeforces: fills the submit form and reads pages from your logged-in browser tab.",
   "permissions": ["tabs", "scripting", "storage", "alarms"],
   "host_permissions": ["https://codeforces.com/*", "https://*.codeforces.com/*", "http://127.0.0.1/*"],
   "background": { "service_worker": "background.js" },
