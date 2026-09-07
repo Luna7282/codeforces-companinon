@@ -45,6 +45,9 @@ let output: vscode.OutputChannel;
 let status: vscode.StatusBarItem;
 let langStatus: vscode.StatusBarItem;
 let relay: RelayServer | undefined;
+/** Set when another window of this same extension owns the relay port — see startRelay(). */
+let remoteRelayPort: number | undefined;
+let relayToken: string;
 let resultsView: ResultsViewProvider;
 let archiveView: ArchiveTree | undefined;
 let archiveTreeView: vscode.TreeView<unknown> | undefined;
@@ -91,6 +94,97 @@ function loadOrCreateRelayToken(context: vscode.ExtensionContext): string {
     // Empty/corrupt file (e.g. a crash mid-write) — nobody owns a valid value yet, reclaim it.
     fs.writeFileSync(file, candidate);
     return candidate;
+}
+
+function newRelayServer(): RelayServer {
+    return new RelayServer(relayToken, (m) => dbg(`[relay] ${m}`), () => {
+        void vscode.window
+            .showWarningMessage(
+                'Codeforces: the companion extension is using an old relay token. Re-pair it.',
+                'Relay info'
+            )
+            .then((choice) => {
+                if (choice === 'Relay info') {
+                    void relayInfo();
+                }
+            });
+    });
+}
+
+/**
+ * True if whatever answered on `port` looks like this same extension's relay
+ * (matches the /health shape) rather than an unrelated process that happens
+ * to be squatting the port. EADDRINUSE alone can't tell those apart.
+ */
+async function isSiblingRelay(port: number): Promise<boolean> {
+    try {
+        const res = await fetch(`http://127.0.0.1:${port}/health`);
+        if (!res.ok) {
+            return false;
+        }
+        const body = (await res.json()) as { tokenRequired?: unknown; protocolVersion?: unknown };
+        return body.tokenRequired === true && typeof body.protocolVersion === 'number';
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * The extension activates in every window, but the relay binds one shared
+ * port — only one window can ever hold it. If EADDRINUSE turns out to be
+ * another window of ours (confirmed via /health, never assumed), that isn't
+ * a failure: that window's relay works and the companion is paired to it.
+ * This window just remembers the port and leaves `relay` unset; deactivate()
+ * on the owning window already frees the port, so the next ensureRelay()
+ * call from any other window picks it up automatically — no explicit
+ * handoff needed.
+ */
+async function startRelay(): Promise<void> {
+    const port = vscode.workspace.getConfiguration('codeforces').get<number>('relayPort', 27121);
+    const candidate = newRelayServer();
+    try {
+        await candidate.start(port);
+        relay = candidate;
+        remoteRelayPort = undefined;
+        // Reads fall back to the companion when Cloudflare blocks direct Node fetch.
+        session.http.setRelayFetcher((u, binary) => relay!.fetchViaCompanion(u, binary));
+    } catch (err) {
+        const code = (err as NodeJS.ErrnoException).code;
+        if (code === 'EADDRINUSE' && (await isSiblingRelay(port))) {
+            relay = undefined;
+            remoteRelayPort = port;
+            dbg(`[relay] port ${port} is owned by another window of this extension — will take over if it closes`);
+            return;
+        }
+        relay = undefined;
+        remoteRelayPort = undefined;
+        void vscode.window.showWarningMessage(
+            `Codeforces: relay could not start on port ${port} (${(err as Error).message}). ` +
+                'Browser submit and Cloudflare-blocked reads are unavailable until you free the port and reload.'
+        );
+    }
+}
+
+/** Call before anything that needs a working relay — retries claiming the port if this window doesn't own it yet. */
+async function ensureRelay(): Promise<void> {
+    if (relay?.running) {
+        return;
+    }
+    await startRelay();
+}
+
+/** Accurate reason the relay isn't usable from THIS window right now, for callers that need a full sentence. */
+function relayUnavailableMessage(): string {
+    if (remoteRelayPort !== undefined) {
+        return (
+            `The browser relay is running in another VS Code window (port ${remoteRelayPort}). ` +
+            'Submit from that window, or close it to let this window take over.'
+        );
+    }
+    return (
+        'The submit relay is not running. Reload the window, or set "codeforces.directSubmit" ' +
+        'if Codeforces is not enforcing its Turnstile check.'
+    );
 }
 
 export function activate(context: vscode.ExtensionContext): void {
@@ -146,32 +240,8 @@ export function activate(context: vscode.ExtensionContext): void {
     setCacheDir(context.globalStorageUri.fsPath);
     void initArchiveRoot();
 
-    relay = new RelayServer(loadOrCreateRelayToken(context), (m) => dbg(`[relay] ${m}`), () => {
-        void vscode.window
-            .showWarningMessage(
-                'Codeforces: the companion extension is using an old relay token. Re-pair it.',
-                'Relay info'
-            )
-            .then((choice) => {
-                if (choice === 'Relay info') {
-                    void relayInfo();
-                }
-            });
-    });
-    const relayPort = vscode.workspace.getConfiguration('codeforces').get<number>('relayPort', 27121);
-    relay
-        .start(relayPort)
-        .then(() => {
-            // Reads fall back to the companion when Cloudflare blocks direct Node fetch.
-            session.http.setRelayFetcher((u, binary) => relay!.fetchViaCompanion(u, binary));
-        })
-        .catch((err) => {
-            void vscode.window.showWarningMessage(
-                `Codeforces: relay could not start on port ${relayPort} (${(err as Error).message}). ` +
-                    'Browser submit and Cloudflare-blocked reads are unavailable until you free the port and reload.'
-            );
-            relay = undefined;
-        });
+    relayToken = loadOrCreateRelayToken(context);
+    void startRelay();
 
     explorerTreeView = vscode.window.createTreeView('codeforcesExplorer', { treeDataProvider: tree });
 
@@ -585,10 +655,19 @@ function deleteUserTest(customIndex: number): void {
 }
 
 async function checkCompanion(): Promise<void> {
+    await ensureRelay();
     if (!relay?.running) {
-        void vscode.window.showWarningMessage(
-            'Codeforces: the relay is not running in this window. Run "Developer: Reload Window".'
-        );
+        if (remoteRelayPort !== undefined) {
+            void vscode.window.showInformationMessage(
+                `Codeforces: another VS Code window is running the browser relay, on port ${remoteRelayPort}. ` +
+                    'Submit and browser-relay reads work from that window; this one will take over automatically ' +
+                    'once it closes.'
+            );
+        } else {
+            void vscode.window.showWarningMessage(
+                'Codeforces: the relay is not running in this window. Run "Developer: Reload Window".'
+            );
+        }
         return;
     }
     // Ping our own /health so a totally dead port is obvious in the log.
@@ -635,8 +714,17 @@ export function deactivate(): void {
 }
 
 async function relayInfo(): Promise<void> {
+    await ensureRelay();
     if (!relay?.running) {
-        void vscode.window.showWarningMessage('Codeforces: the submit relay is not running. Reload the window.');
+        if (remoteRelayPort !== undefined) {
+            void vscode.window.showWarningMessage(
+                `Codeforces: the browser relay is running in another VS Code window (port ${remoteRelayPort}), ` +
+                    'not this one. Run "Relay info" from that window instead, or close it to let this window ' +
+                    'take over.'
+            );
+        } else {
+            void vscode.window.showWarningMessage('Codeforces: the submit relay is not running. Reload the window.');
+        }
         return;
     }
     // One paste-able "port:token" string — the companion's options page
@@ -1180,11 +1268,9 @@ async function queueBrowserSubmit(
     programTypeId: string,
     programTypeName: string
 ): Promise<string> {
+    await ensureRelay();
     if (!relay?.running) {
-        throw new Error(
-            'The submit relay is not running. Reload the window, or set "codeforces.directSubmit" ' +
-                'if Codeforces is not enforcing its Turnstile check.'
-        );
+        throw new Error(relayUnavailableMessage());
     }
 
     // Baseline: newest existing submission id for THIS problem, captured before

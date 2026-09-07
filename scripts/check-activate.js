@@ -7,6 +7,7 @@
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
+const http = require('http');
 const Module = require('module');
 
 const scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cf-activate-check-'));
@@ -73,7 +74,14 @@ function autoStub(name) {
 }
 
 const registeredCommands = new Map();
-const config = { 'codeforces.relayPort': 27121 };
+// A dedicated port, not the real default (27121) — this test's own fake
+// sibling relay binds it below, and must not collide with a real relay that
+// might be running on this machine while the check runs.
+const TEST_RELAY_PORT = 27321;
+const config = { 'codeforces.relayPort': TEST_RELAY_PORT };
+
+const infoMessages = [];
+const warningMessages = [];
 
 const vscodeStub = {
     // classes / enums touched at module-eval time or during activate()
@@ -100,8 +108,8 @@ const vscodeStub = {
         registerWebviewViewProvider: () => new Disposable(() => {}),
         registerUriHandler: () => new Disposable(() => {}),
         onDidChangeActiveTextEditor: () => new Disposable(() => {}),
-        showInformationMessage: async () => undefined,
-        showWarningMessage: async () => undefined,
+        showInformationMessage: async (msg) => { infoMessages.push(msg); return undefined; },
+        showWarningMessage: async (msg) => { warningMessages.push(msg); return undefined; },
         showErrorMessage: async () => undefined,
         showOpenDialog: async () => undefined,
         activeTextEditor: undefined
@@ -193,35 +201,116 @@ const fakeContext = {
     extensionMode: 3
 };
 
-try {
-    ext.activate(fakeContext);
-} catch (err) {
-    console.error('FAIL: activate() threw:');
-    console.error(err.stack);
-    process.exit(1);
-}
-console.log(`OK: activate() ran without throwing.`);
-console.log(`Registered ${registeredCommands.size} commands:`);
-for (const id of registeredCommands.keys()) console.log(`  - ${id}`);
-
-const hasRunTests = registeredCommands.has('codeforces.runTests');
-console.log(hasRunTests ? 'OK: codeforces.runTests command registered (covers the runner.ts dynamic import path).' : 'FAIL: codeforces.runTests missing.');
-
-// give any fire-and-forget promises (session.load(), relay.start(), etc.) a
-// tick to surface unhandled rejections, then exit (relay opened a real local
-// socket that would otherwise keep the process alive).
 let unhandled = false;
 process.on('unhandledRejection', (err) => {
     unhandled = true;
     console.error('FAIL: unhandled rejection during/after activate():');
     console.error(err && err.stack ? err.stack : err);
 });
-// Not unref'd on purpose: keeps the process alive briefly so relay.start()
-// and any other queued microtasks/promises get a chance to run (and surface
-// unhandled rejections) before we tear down and force-exit.
-setTimeout(() => {
+
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function main() {
+    // Stands in for "another VS Code window already owns the relay port" —
+    // real EADDRINUSE, real /health response, no VS Code involved. Exercises
+    // the two-window port-collision fix end to end through the actual
+    // activate() code path, not a reimplementation of its logic.
+    const siblingRelay = http.createServer((req, res) => {
+        if (req.url === '/health') {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ ok: true, port: TEST_RELAY_PORT, tokenRequired: true, protocolVersion: 2 }));
+            return;
+        }
+        res.writeHead(404).end();
+    });
+    await new Promise((resolve, reject) => {
+        siblingRelay.once('error', reject);
+        siblingRelay.listen(TEST_RELAY_PORT, '127.0.0.1', resolve);
+    });
+
+    try {
+        ext.activate(fakeContext);
+    } catch (err) {
+        console.error('FAIL: activate() threw:');
+        console.error(err.stack);
+        process.exit(1);
+    }
+    console.log('OK: activate() ran without throwing.');
+    console.log(`Registered ${registeredCommands.size} commands:`);
+    for (const id of registeredCommands.keys()) console.log(`  - ${id}`);
+
+    const hasRunTests = registeredCommands.has('codeforces.runTests');
+    console.log(hasRunTests ? 'OK: codeforces.runTests command registered (covers the runner.ts dynamic import path).' : 'FAIL: codeforces.runTests missing.');
+
+    // activate() kicks off startRelay() fire-and-forget (void, not awaited) —
+    // give its EADDRINUSE -> /health round trip a moment to settle before
+    // checking that it correctly recognized the sibling and didn't just warn.
+    await sleep(300);
+
+    let portCollisionOk = true;
+    const checkCompanion = registeredCommands.get('codeforces.checkCompanion');
+    if (checkCompanion) {
+        await checkCompanion();
+        const sawSiblingInfo = infoMessages.some(
+            (m) => /another VS Code window/.test(m) && m.includes(String(TEST_RELAY_PORT))
+        );
+        const sawGenericWarning = warningMessages.some((m) => /relay is not running in this window/.test(m));
+        if (!sawSiblingInfo || sawGenericWarning) {
+            portCollisionOk = false;
+            console.error(
+                'FAIL: checkCompanion did not accurately report a sibling-owned relay.\n' +
+                    '  infoMessages: ' + JSON.stringify(infoMessages) + '\n' +
+                    '  warningMessages: ' + JSON.stringify(warningMessages)
+            );
+        } else {
+            console.log('OK: checkCompanion correctly reports the port as owned by another window, not "not running".');
+        }
+    } else {
+        portCollisionOk = false;
+        console.error('FAIL: codeforces.checkCompanion not registered.');
+    }
+
+    infoMessages.length = 0;
+    warningMessages.length = 0;
+    const relayInfoCmd = registeredCommands.get('codeforces.relayInfo');
+    if (relayInfoCmd) {
+        await relayInfoCmd();
+        const sawAccurate = warningMessages.some(
+            (m) => /another VS Code window/.test(m) && m.includes(String(TEST_RELAY_PORT)) && /not this one/.test(m)
+        );
+        if (!sawAccurate) {
+            portCollisionOk = false;
+            console.error(
+                'FAIL: relayInfo did not accurately report a sibling-owned relay.\n' +
+                    '  warningMessages: ' + JSON.stringify(warningMessages)
+            );
+        } else {
+            console.log('OK: relayInfo correctly distinguishes "another window owns it" from "not running".');
+        }
+    } else {
+        portCollisionOk = false;
+        console.error('FAIL: codeforces.relayInfo not registered.');
+    }
+
+    await new Promise((resolve) => siblingRelay.close(resolve));
     fs.rmSync(scratchDir, { recursive: true, force: true });
-    if (unhandled || !hasRunTests) process.exit(1);
+
+    // Set exitCode and let the process exit naturally rather than calling
+    // process.exit() — an abrupt exit right after closing a real server and
+    // doing fetch() calls hits a libuv/Windows race (UV_HANDLE_CLOSING
+    // assertion in src\win\async.c) that kills the process with a non-test
+    // exit code even when every check above passed.
+    if (unhandled || !hasRunTests || !portCollisionOk) {
+        process.exitCode = 1;
+        return;
+    }
     console.log('ALL CHECKS PASSED');
-    process.exit(0);
-}, 800);
+    process.exitCode = 0;
+}
+
+main().catch((err) => {
+    console.error('FAIL:', err && err.stack ? err.stack : err);
+    process.exitCode = 1;
+});

@@ -465,6 +465,46 @@ content-type seen, companion fallback, final inline-or-give-up decision) so
 a real failure shows exactly where it breaks instead of needing another
 round of hand-testing.
 
+### Two windows, one relay port
+
+The extension activates in every VS Code window, but the relay binds one
+shared port (`codeforces.relayPort`, default 27121) — only one window can
+ever hold it. Before this fix, the second window's `RelayServer.start()`
+rejected with `EADDRINUSE`, and `activate()`'s catch handler treated that
+identically to "something unrelated is squatting the port": it warned
+"relay could not start... free the port and reload" and set `relay =
+undefined` for the rest of that window's life. Reloading a window can never
+free a port a *different* window holds, so that window was permanently
+stuck until manually closed and reopened after the first one shut down.
+
+Reproduced headlessly rather than by hand with two real windows: two real
+`RelayServer` instances (or, easier, the actual currently-running relay from
+a real window plus one more `RelayServer.start()` call) both targeting
+27121 — confirmed the exact `EADDRINUSE` and the exact misleading message.
+
+Fix: `EADDRINUSE` alone doesn't say *who* holds the port, so it's never
+trusted alone — a `GET /health` on that port is checked against our own
+`/health` shape (`tokenRequired: true`, a numeric `protocolVersion`) before
+deciding anything. If it matches, this is a sibling window of the same
+extension, not a failure: that window's relay works, the companion is
+paired to it, and this window just remembers the port
+(`remoteRelayPort`) instead of discarding all relay state. `checkCompanion`,
+`relayInfo`, and the submit path now report *that* accurately ("another VS
+Code window is running the relay, on port N") instead of "not running."
+
+Considered making every window's relay fully usable at once (routing jobs
+through whichever window owns the port, over a small internal HTTP API) —
+correct, but a real new cross-window RPC surface to get right and to test.
+Went with the smaller fix instead: the owning window's `deactivate()`
+already calls `relay.stop()`, which already frees the port — nothing new
+needed there. What was missing was any other window *retrying* after that.
+`ensureRelay()` does exactly that, called right before anything that
+actually needs the relay (submit, Check companion, Relay info) — so the
+next window to need it picks up ownership automatically once the original
+owner closes, with no explicit handoff message between windows required.
+Only one window's relay ever runs at a time; this doesn't change that, it
+just makes the state truthful and self-healing instead of stuck.
+
 ## Local archive
 
 ### Layout
