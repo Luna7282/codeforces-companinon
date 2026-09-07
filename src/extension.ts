@@ -18,7 +18,7 @@ import { Session } from './session';
 import { showStatement } from './statement';
 import { fetchLanguages, latestSubmissionId, submitSolution, watchVerdict } from './submit';
 import { CodeforcesTree, CodeforcesNode } from './tree';
-import { Contest, ContestKind, Problem, Sample, problemUrl } from './types';
+import { Contest, ContestKind, Language, Problem, Sample, problemUrl } from './types';
 import { RelayServer } from './relay';
 import { setCacheDir, clearCache } from './cache';
 import { ResultsViewProvider, ResultsActions } from './resultsView';
@@ -36,6 +36,7 @@ import {
     forceRebuild
 } from './archiveView';
 import { showWalkthrough } from './walkthrough';
+import { DEFAULT_LANGUAGES, LanguagesConfig, extensionForLanguageName } from './languages';
 
 let session: Session;
 let api: CodeforcesApi;
@@ -230,7 +231,7 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.commands.registerCommand('codeforces.archiveSearch', archiveSearch),
         vscode.window.onDidChangeActiveTextEditor(() => syncActiveProblem()),
         vscode.workspace.onDidChangeConfiguration((e) => {
-            if (e.affectsConfiguration('codeforces.programTypeName')) {
+            if (e.affectsConfiguration('codeforces.languages')) {
                 syncActiveProblem();
             }
         })
@@ -437,9 +438,22 @@ async function changeWorkspaceFolder(): Promise<void> {
     );
 }
 
-function currentLang(): string | undefined {
-    const n = vscode.workspace.getConfiguration('codeforces').get<string>('programTypeName', '').trim();
+function allLanguages(): LanguagesConfig {
+    return vscode.workspace.getConfiguration('codeforces').get<LanguagesConfig>('languages', {});
+}
+
+/** The Codeforces compiler name last picked for `ext` (e.g. "GNU G++20"), if any. */
+function languageNameFor(ext: string): string | undefined {
+    const n = (allLanguages()[ext]?.programTypeName ?? DEFAULT_LANGUAGES[ext]?.programTypeName ?? '').trim();
     return n || undefined;
+}
+
+/** Merge-updates just `ext`'s entry in codeforces.languages — never clobbers other extensions. */
+async function setLanguageName(ext: string, programTypeName: string): Promise<void> {
+    const cfg = vscode.workspace.getConfiguration('codeforces');
+    const languages = { ...allLanguages() };
+    languages[ext] = { ...DEFAULT_LANGUAGES[ext], ...languages[ext], programTypeName };
+    await cfg.update('languages', languages, vscode.ConfigurationTarget.Global);
 }
 
 /** Point the Results panel + language status bar at the active solution file. */
@@ -454,14 +468,15 @@ function syncActiveProblem(): void {
         langStatus.hide();
         return;
     }
-    langStatus.text = `$(gear) ${currentLang() ?? 'CF: set language'}`;
-    langStatus.tooltip = 'Codeforces submission language — click to change';
+    const lang = languageNameFor(path.extname(file));
+    langStatus.text = `$(gear) ${lang ?? 'CF: set language'} $(chevron-down)`;
+    langStatus.tooltip = 'Codeforces submission language for this file — click to change';
     langStatus.command = 'codeforces.pickLanguage';
     langStatus.show();
 
     if (file === panelFile) {
         panelMeta = meta; // pick up on-disk changes (e.g. custom tests)
-        resultsView.setLang(currentLang());
+        resultsView.setLang(path.basename(file), lang);
     } else {
         setPanelProblem(file, meta);
     }
@@ -475,7 +490,8 @@ function setPanelProblem(file: string, meta: ProblemMeta): void {
         meta.samples,
         meta.userTests ?? [],
         meta.attempts ?? [],
-        currentLang()
+        path.basename(file),
+        languageNameFor(path.extname(file))
     );
 }
 
@@ -542,13 +558,14 @@ async function runTestsFor(
     resultsView.setRunning(onlyIndex === undefined ? tests.map((_, i) => i) : [onlyIndex]);
     resultsView.setBusy(true);
 
+    const language = path.extname(file);
     let compileOutput = '';
     try {
         compileOutput = await compile(file);
     } catch (err) {
         const msg = (err as Error).message;
         resultsView.setError('Compilation failed', msg);
-        recordRun(dir, { at: Date.now(), source, compileOk: false, compileOutput: msg, tests: [] });
+        recordRun(dir, { at: Date.now(), source, language, compileOk: false, compileOutput: msg, tests: [] });
         return;
     }
     try {
@@ -564,6 +581,7 @@ async function runTestsFor(
         recordRun(dir, {
             at: Date.now(),
             source,
+            language,
             compileOk: true,
             compileOutput: compileOutput || undefined,
             tests: results.map((r, k) => ({
@@ -1094,7 +1112,7 @@ function activeMeta(context: string): { file: string; meta: ProblemMeta } | unde
         output.show(true);
         void vscode.window.showWarningMessage(
             `Codeforces: "${vscode.workspace.asRelativePath(file)}" isn’t linked to a problem ` +
-                `(no metadata at .cf/${path.basename(where)}). Open the problem from the Codeforces view — ` +
+                `(no metadata at ${path.basename(where)} in that folder). Open the problem from the Codeforces view — ` +
                 'that creates the file and its metadata — then run this on that file. See the Codeforces output channel.'
         );
         return undefined;
@@ -1116,6 +1134,23 @@ async function runTests(): Promise<void> {
     await runTestsFor(found.file, panelMeta);
 }
 
+/** Raw compiler QuickPick, no side effects — shared by pickLanguage() and resolveProgramTypeId(). */
+async function promptForLanguage(langs: Language[]): Promise<{ id: string; name: string } | undefined> {
+    const choice = await vscode.window.showQuickPick(
+        langs.map((l) => ({ label: l.name, id: l.id })),
+        { title: 'Submission language' }
+    );
+    return choice ? { id: choice.id, name: choice.label } : undefined;
+}
+
+/**
+ * The status-bar / command-palette "change language" action. If the picked
+ * compiler maps to a DIFFERENT extension than the active file, that's a
+ * language switch for the problem: scaffold that language's file (never
+ * overwriting one that already exists) and switch focus to it, leaving the
+ * original untouched. Picking a compiler for the SAME extension just updates
+ * the remembered name.
+ */
 async function pickLanguage(): Promise<string | undefined> {
     const found = activeMeta('pickLanguage');
     if (!found) {
@@ -1123,21 +1158,54 @@ async function pickLanguage(): Promise<string | undefined> {
     }
     try {
         const langs = await fetchLanguages(session, found.meta.problem);
-        const choice = await vscode.window.showQuickPick(
-            langs.map((l) => ({ label: l.name, id: l.id })),
-            { title: 'Submission language' }
-        );
-        if (!choice) {
+        const picked = await promptForLanguage(langs);
+        if (!picked) {
             return undefined;
         }
-        const cfg = vscode.workspace.getConfiguration('codeforces');
-        await cfg.update('programTypeId', choice.id, vscode.ConfigurationTarget.Global);
-        await cfg.update('programTypeName', choice.label, vscode.ConfigurationTarget.Global);
-        return choice.id;
+        const currentExt = path.extname(found.file);
+        const targetExt = extensionForLanguageName(picked.name) ?? currentExt;
+
+        if (targetExt !== currentExt) {
+            const newFile = ensureSolutionFile(found.meta.problem, found.meta, targetExt);
+            const doc = await vscode.workspace.openTextDocument(newFile);
+            await vscode.window.showTextDocument(doc, vscode.ViewColumn.One);
+        }
+
+        await setLanguageName(targetExt, picked.name);
+        return picked.id;
     } catch (err) {
         fail(err);
         return undefined;
     }
+}
+
+/**
+ * Quiet resolution used by submit: a Codeforces compiler id for `file`'s own
+ * language, never switching files. Prefers the name already remembered for
+ * this extension, re-matched against THIS problem's own compiler list since
+ * a numeric id from one contest is not valid on another; prompts only when
+ * there's no remembered name yet, or it no longer matches.
+ */
+async function resolveProgramTypeId(file: string, problem: Problem): Promise<string | undefined> {
+    const ext = path.extname(file);
+    let langs: Language[];
+    try {
+        langs = await fetchLanguages(session, problem);
+    } catch (err) {
+        fail(err);
+        return undefined;
+    }
+    const savedName = languageNameFor(ext);
+    const match = savedName ? langs.find((l) => l.name === savedName) : undefined;
+    if (match) {
+        return match.id;
+    }
+    const picked = await promptForLanguage(langs);
+    if (!picked) {
+        return undefined;
+    }
+    await setLanguageName(ext, picked.name);
+    return picked.id;
 }
 
 async function submit(): Promise<void> {
@@ -1160,14 +1228,9 @@ async function submitFor(file: string | undefined, meta: ProblemMeta | undefined
     }
     await saveDoc(file);
 
-    const cfg = vscode.workspace.getConfiguration('codeforces');
-    let programTypeId = cfg.get<string>('programTypeId', '').trim();
+    const programTypeId = await resolveProgramTypeId(file, meta.problem);
     if (!programTypeId) {
-        const picked = await pickLanguage();
-        if (!picked) {
-            return;
-        }
-        programTypeId = picked;
+        return;
     }
 
     const source = fs.readFileSync(file, 'utf8');
@@ -1175,7 +1238,8 @@ async function submitFor(file: string | undefined, meta: ProblemMeta | undefined
         void vscode.window.showWarningMessage('The file is empty.');
         return;
     }
-    const language = cfg.get<string>('programTypeName', '') || programTypeId;
+    const cfg = vscode.workspace.getConfiguration('codeforces');
+    const language = languageNameFor(path.extname(file)) ?? programTypeId;
     const record = (verdict: string, extra?: Partial<Attempt>): void => {
         const next = appendAttempt(file, {
             at: Date.now(),
@@ -1205,7 +1269,7 @@ async function submitFor(file: string | undefined, meta: ProblemMeta | undefined
                   { location: vscode.ProgressLocation.Notification, title: 'Submitting to Codeforces' },
                   () => submitSolution(session, meta.problem, source, programTypeId)
               )
-            : await queueBrowserSubmit(meta.problem, source, programTypeId, cfg.get<string>('programTypeName', ''));
+            : await queueBrowserSubmit(meta.problem, source, programTypeId, language);
 
         status.show();
         status.text = `$(sync~spin) ${meta.problem.index}: in queue`;

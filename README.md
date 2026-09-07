@@ -44,7 +44,7 @@ If that's a dealbreaker, this extension isn't for you yet. If it's fine, the com
 - **Sidebar**: Contests, Gym, Problemset (browse by rating), and your groups, with solve/attempt state and API-backed solved marks.
 - **Statement webview** beside your solution file, with samples, limits, and images.
 - **Results panel** (below the tree): one card per test — PASS/FAIL badge, runtime, input/expected/actual with the first differing line highlighted. Passing cards collapse; failing ones stay open. Add your own test cases. Compile errors show verbatim, in the panel, not a toast. Submit and watch the verdict from the same panel.
-- **Submission compiler** shown in the status bar next to the open problem — click to change it.
+- **Submission compiler** shown in the status bar next to the open problem — click to change it. Picking a different language scaffolds that language's file in the same problem folder (never touching one that already exists); run and submit always act on whichever file is focused, not a global setting, so C++ and Python solutions for the same problem coexist and compile independently.
 - **Local archive of everything you've done** — every run and every submission, including the ones Codeforces refused outright — searchable offline in a dedicated **Archive view** (its own Activity Bar icon): browse by judge → contest/group/gym → problem, a timeline per problem (consecutive identical outcomes collapse into one row), click any entry to reopen that exact source read-only and diff it against your current file.
 - **`Codeforces: Stats`** — attempted / solved / solve rate / attempts-per-solve, and a verdict breakdown, from that local history.
 
@@ -75,12 +75,10 @@ If that's a dealbreaker, this extension isn't for you yet. If it's fine, the com
 | --- | --- |
 | `codeforces.handle` | Handle used for solved/attempted marks. Set automatically at login. |
 | `codeforces.workspaceRoot` | Root folder for solutions + history. Prompted for on first use; change via `Codeforces: Change workspace folder`. |
-| `codeforces.extension` | File extension for new solutions. |
+| `codeforces.extension` | File extension for a problem's *first* solution file. A problem can hold more than one language at once — see `codeforces.languages`. |
 | `codeforces.templatePath` | File copied into every new solution. |
-| `codeforces.compileCommand` | Placeholders: `${file}` `${bin}` `${dir}` `${name}`. Empty for interpreted languages. |
-| `codeforces.runCommand` | Same placeholders. |
+| `codeforces.languages` | Compile/run commands per file extension, plus the Codeforces compiler name last picked for it (set automatically by the language picker). Placeholders: `${file}` `${bin}` `${dir}` `${name}`. Leave `compileCommand` unset for an interpreted language. Run/submit act on the active file's own extension, not one global setting. |
 | `codeforces.timeoutMs` | Per-sample time limit. |
-| `codeforces.programTypeId` | Compiler id. Set via the language picker / the status-bar chip. |
 | `codeforces.groups` | Group codes shown in the tree. |
 | `codeforces.contestLimit` | How many contests to list. |
 | `codeforces.relayPort` | Localhost port the companion polls (default 27121, bound to 127.0.0.1). |
@@ -122,10 +120,11 @@ Everything lives under your workspace folder, keyed by `{ judge, scope, contestR
   codeforces/
     group-<code>-<contestId>/  gym-<contestId>/  contest-<contestId>/
       A/
-        A.cpp                       current source
+        A.cpp                       one file per language you've tried
+        A.py                        — .meta.json below is shared by all of them
         .meta.json                  ref, problem, samples, user tests
-        runs/<timestamp>.json       one per local run
-        attempts/<timestamp>.json   one per submission
+        runs/<timestamp>.json       one per local run, tagged with language
+        attempts/<timestamp>.json   one per submission, tagged with language
   .archive-index.json               rolled-up index for fast reads
 ```
 

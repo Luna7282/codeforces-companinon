@@ -25,6 +25,8 @@ interface AttemptRow {
 
 interface PanelState {
     problem?: { index: string; name: string; url: string };
+    /** Basename of the file these results are for — a problem can have more than one language's file. */
+    file?: string;
     lang?: string;
     sampleCount: number;
     tests: { label: string; input: string; expected: string; custom: boolean }[];
@@ -102,6 +104,7 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
         samples: Sample[],
         userTests: Sample[],
         attempts: Attempt[],
+        file: string,
         lang: string | undefined
     ): void {
         const tests = [
@@ -110,6 +113,7 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
         ];
         this.state = {
             problem,
+            file,
             lang,
             sampleCount: samples.length,
             tests,
@@ -127,7 +131,8 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
         this.push();
     }
 
-    setLang(lang: string | undefined): void {
+    setLang(file: string, lang: string | undefined): void {
+        this.state.file = file;
         this.state.lang = lang;
         this.push();
     }
@@ -226,6 +231,8 @@ export class ResultsViewProvider implements vscode.WebviewViewProvider {
 
   header { padding: 4px 10px 6px; border-bottom: 1px solid var(--vscode-panel-border); }
   header .title { font-weight: 600; }
+  header .file { font-size: 0.85em; font-family: var(--vscode-editor-font-family); }
+  .chip.dropdown { display: inline-flex; align-items: center; gap: 2px; }
   .chip {
     font-size: 0.85em; padding: 0 6px; border-radius: 3px;
     background: var(--vscode-badge-background); color: var(--vscode-badge-foreground);
@@ -403,11 +410,12 @@ function render() {
       $('span', { class: 'title', text: s.problem.index + '. ' + s.problem.name }),
       $('a', { href: s.problem.url, text: 'open' })
     ]),
+    s.file ? $('div', { class: 'row' }, [ $('span', { class: 'muted file', text: s.file }) ]) : null,
     $('div', { class: 'row'}, [
       $('button', { onclick: () => post('runAll'), text: s.busy ? 'Running…' : 'Run all' }),
       $('button', { class: 'secondary', onclick: () => post('submit'), text: 'Submit' }),
-      $('span', { class: 'chip', title: 'Change compiler', onclick: () => vscode.postMessage({ type: 'pickLang' }),
-                  text: s.lang || 'set language' })
+      $('span', { class: 'chip dropdown', title: 'Change compiler for this file', onclick: () => vscode.postMessage({ type: 'pickLang' }),
+                  text: (s.lang || 'set language') + '  ▾' })
     ])
   ]);
   app.appendChild(head);

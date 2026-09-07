@@ -505,6 +505,58 @@ owner closes, with no explicit handoff message between windows required.
 Only one window's relay ever runs at a time; this doesn't change that, it
 just makes the state truthful and self-healing instead of stuck.
 
+### Multiple languages per problem
+
+Requested as "the metadata is currently keyed per source file
+(`.cf/<filename>.json`) — move it to per-problem." Checked before building
+anything: it already is. `.cf/<filename>.json` is the *pre-migration* layout
+`migrate.ts` converts away from; the current one (documented at the top of
+this file, under "Local archive") already keys `.meta.json` and
+`attempts/`/`runs/` off the *problem directory*, not the filename — two
+files in the same folder already shared metadata correctly. The user's
+belief traced back to a real bug, though: `activeMeta()`'s "not linked to a
+problem" message printed `.cf/${path.basename(where)}` — a path shape that
+hasn't existed since the migration — so anyone hitting that message would
+reasonably think that's still how it works. Fixed the message; a
+`TESTING.md` line had the same stale claim.
+
+So the actual gaps were elsewhere, all downstream of language being a
+single **global** setting:
+
+- `codeforces.compileCommand` / `runCommand` were one template each — no way
+  to say "C++ compiles like *this*, Python runs like *that*". Replaced with
+  `codeforces.languages`, keyed by file extension.
+- `codeforces.programTypeId` / `programTypeName` were one global value —
+  meaning switching languages for problem B could silently submit problem A
+  under the wrong compiler if you hadn't re-picked. Worse, the numeric id
+  itself isn't portable between contests (Codeforces renumbers compilers per
+  contest), so a *stored* id was never fully correct even for a single
+  language — this was a latent bug independent of multi-language support.
+  Fixed by never persisting the id at all: only the compiler *name* is
+  remembered, per extension, and re-matched against a fresh per-problem
+  compiler list every time an id is actually needed.
+- Nothing scaffolded a second language's file — picking a different compiler
+  just changed a setting. `pickLanguage()` now checks whether the picked
+  compiler's inferred extension (`extensionForLanguageName()`, a best-effort
+  name→extension table — Codeforces has no API for this) differs from the
+  active file's; if so it scaffolds that file (never overwriting one that
+  exists, via `ensureSolutionFile`'s existing "only if absent" check) and
+  switches focus to it. Same-extension picks just update the remembered
+  name — no file churn for "I want a newer G++ standard."
+- `RunRecord` had no `language` field (`AttemptRecord` already did) — added
+  one, tagged from the active file's extension at run time. Also had the
+  fold-identical-runs comparison start checking `language` too, even though
+  two different languages sharing byte-identical source is exceedingly
+  unlikely — the check was one line and the alternative (a Python run's
+  count silently absorbed into a same-source C++ run's history) is a genuine
+  correctness bug, however rare, cheap to close off.
+- The compiler status-bar item and the Results-panel chip were both plain
+  text with a click handler and nothing that read as "this opens a menu" —
+  added a trailing chevron to both.
+- The Results panel showed the problem and the language, but not *which
+  file* — a real gap once a problem can have more than one open at once.
+  Added the active file's basename to the header.
+
 ## Local archive
 
 ### Layout

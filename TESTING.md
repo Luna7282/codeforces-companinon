@@ -4,7 +4,7 @@
 > (a test handle, a private group, problem *Introduction to C++ / A*),
 > companion loaded in Chrome. Reads via the companion, submit filled by the
 > companion + Turnstile solved by hand, verdict polled back into VS Code, and the
-> attempt recorded to `.cf/`. Re-run this after any change to `browser/`,
+> attempt recorded to `attempts/`. Re-run this after any change to `browser/`,
 > `src/relay.ts`, `src/http.ts`, or the scrapers.
 
 Walk this once after installing the vsix and loading the companion. Each step
@@ -158,10 +158,11 @@ opens one (visible) — solve the challenge there and retry.
   sample — spinner while running, then a green PASS badge and the card collapses.
   A failing card stays open with input / expected / actual side by side and the
   first differing line highlighted. Per-card **Run**, a **Run all** button, and an
-  **Add test** box (custom cases persist in `.cf/<file>.json`).
+  **Add test** box (custom cases persist in the problem's `.meta.json`, shared
+  across every language file in that folder).
 - **Likely failure:** `g++: not found` etc. → shows verbatim in a red block in
-  the panel (not a toast); set `codeforces.compileCommand`. A wrong-answer card →
-  the highlighted diff line points at where output diverges.
+  the panel (not a toast); check `codeforces.languages[".cpp"].compileCommand`.
+  A wrong-answer card → the highlighted diff line points at where output diverges.
 
 ## 8. Submit via the relay
 

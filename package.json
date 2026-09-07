@@ -241,32 +241,30 @@
         "codeforces.extension": {
           "type": "string",
           "default": ".cpp",
-          "description": "File extension used for new solution files."
+          "description": "File extension used for a problem's first solution file. A problem can hold more than one language at once (see codeforces.languages) — this only picks the one scaffolded the first time you open a problem."
         },
         "codeforces.templatePath": {
           "type": "string",
           "default": "",
           "description": "Absolute path to a template file copied into every new solution file."
         },
-        "codeforces.compileCommand": {
-          "type": "string",
-          "default": "g++ -std=c++17 -O2 -o \"${bin}\" \"${file}\"",
-          "description": "Command used to compile. Leave empty for interpreted languages. Placeholders: ${file} ${bin} ${dir} ${name}"
-        },
-        "codeforces.runCommand": {
-          "type": "string",
-          "default": "\"${bin}\"",
-          "description": "Command used to run one test. Placeholders: ${file} ${bin} ${dir} ${name}"
+        "codeforces.languages": {
+          "type": "object",
+          "default": {
+            ".cpp": {
+              "compileCommand": "g++ -std=c++17 -O2 -o \"${bin}\" \"${file}\"",
+              "runCommand": "\"${bin}\""
+            },
+            ".py": {
+              "runCommand": "python \"${file}\""
+            }
+          },
+          "description": "Compile/run commands per file extension, and (set automatically by 'Codeforces: Choose submission language') the Codeforces compiler name last picked for that extension. Placeholders in compileCommand/runCommand: ${file} ${bin} ${dir} ${name}. Leave compileCommand unset for an interpreted language. Run and submit act on whichever extension the active editor file has, not one global setting."
         },
         "codeforces.timeoutMs": {
           "type": "number",
           "default": 5000,
           "description": "Time limit applied to each sample test, in milliseconds."
-        },
-        "codeforces.programTypeId": {
-          "type": "string",
-          "default": "",
-          "description": "Codeforces compiler id used when submitting. Set it with 'Codeforces: Choose submission language'."
         },
         "codeforces.directSubmit": {
           "type": "boolean",
@@ -282,11 +280,6 @@
           "type": "boolean",
           "default": false,
           "description": "Write verbose relay / command tracing to the Codeforces output channel. Off by default."
-        },
-        "codeforces.programTypeName": {
-          "type": "string",
-          "default": "",
-          "description": "Readable name of the chosen compiler. Set automatically."
         },
         "codeforces.groups": {
           "type": "array",
@@ -321,7 +314,7 @@
     "vscode:prepublish": "npm run bundle",
     "gen:companion-config": "node scripts/gen-companion-config.js",
     "build:companion": "npm run gen:companion-config && node browser/build.js",
-    "selftest": "npm run compile && node out/relay.js && node out/archive.js && node out/migrate.js && node out/scrape.js && npm run bundle && node scripts/check-activate.js",
+    "selftest": "npm run compile && node out/relay.js && node out/archive.js && node out/migrate.js && node out/scrape.js && node out/languages.js && npm run bundle && node scripts/check-activate.js",
     "deploy": "npm run compile && npm run bundle && node -e \"require('fs').mkdirSync('dist',{recursive:true})\" && npx vsce package --no-dependencies --out dist/codeforces-inline.vsix && code --install-extension dist/codeforces-inline.vsix --force"
   },
   "dependencies": {

@@ -1,8 +1,8 @@
 import { exec, spawn } from 'child_process';
-import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { Sample } from './types';
+import { DEFAULT_LANGUAGES, LanguagesConfig, expandCommand } from './languages';
 
 export type TestOutcome = 'passed' | 'wrong answer' | 'timed out' | 'runtime error';
 
@@ -15,24 +15,18 @@ export interface TestResult {
     stderr: string;
 }
 
-function expand(template: string, sourceFile: string): string {
-    const dir = path.dirname(sourceFile);
-    const name = path.basename(sourceFile, path.extname(sourceFile));
-    const bin = path.join(dir, name + (os.platform() === 'win32' ? '.exe' : ''));
-    return template
-        .replace(/\$\{file\}/g, sourceFile)
-        .replace(/\$\{dir\}/g, dir)
-        .replace(/\$\{name\}/g, name)
-        .replace(/\$\{bin\}/g, bin);
+function languageConfigFor(ext: string): { compileCommand?: string; runCommand?: string } {
+    const languages = vscode.workspace.getConfiguration('codeforces').get<LanguagesConfig>('languages', {});
+    return languages[ext] ?? DEFAULT_LANGUAGES[ext] ?? {};
 }
 
 /** Resolves with the compiler's stderr on success (warnings, usually empty); rejects on failure. */
 export async function compile(sourceFile: string): Promise<string> {
-    const template = vscode.workspace.getConfiguration('codeforces').get<string>('compileCommand', '').trim();
+    const template = (languageConfigFor(path.extname(sourceFile)).compileCommand ?? '').trim();
     if (!template) {
         return '';
     }
-    const command = expand(template, sourceFile);
+    const command = expandCommand(template, sourceFile);
     return new Promise<string>((resolve, reject) => {
         exec(command, { cwd: path.dirname(sourceFile) }, (err, _stdout, stderr) => {
             if (err) {
@@ -90,13 +84,13 @@ function runOne(command: string, cwd: string, input: string, timeoutMs: number):
 }
 
 export async function runSamples(sourceFile: string, samples: Sample[]): Promise<TestResult[]> {
-    const cfg = vscode.workspace.getConfiguration('codeforces');
-    const runTemplate = cfg.get<string>('runCommand', '').trim();
-    const timeoutMs = cfg.get<number>('timeoutMs', 5000);
+    const ext = path.extname(sourceFile);
+    const timeoutMs = vscode.workspace.getConfiguration('codeforces').get<number>('timeoutMs', 5000);
+    const runTemplate = (languageConfigFor(ext).runCommand ?? '').trim();
     if (!runTemplate) {
-        throw new Error('Set codeforces.runCommand before running tests.');
+        throw new Error(`No run command configured for "${ext}" files. Add one under codeforces.languages.`);
     }
-    const command = expand(runTemplate, sourceFile);
+    const command = expandCommand(runTemplate, sourceFile);
     const cwd = path.dirname(sourceFile);
 
     const results: TestResult[] = [];

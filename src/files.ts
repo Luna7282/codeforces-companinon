@@ -49,10 +49,11 @@ export function workspaceRoot(): string {
     throw new Error('No Codeforces workspace folder set. Run "Codeforces: Change workspace folder".');
 }
 
-export function solutionPath(problem: Problem): string {
-    const ext = vscode.workspace.getConfiguration('codeforces').get<string>('extension', '.cpp');
+/** `ext` picks which language's file within the problem folder — defaults to codeforces.extension. */
+export function solutionPath(problem: Problem, ext?: string): string {
+    const resolvedExt = ext ?? vscode.workspace.getConfiguration('codeforces').get<string>('extension', '.cpp');
     const dir = problemDir(refOf(problem));
-    return path.join(dir, `${path.basename(dir)}${ext}`);
+    return path.join(dir, `${path.basename(dir)}${resolvedExt}`);
 }
 
 /** Where the diagnostic in activeMeta() points when a file isn't linked. */
@@ -130,11 +131,16 @@ function templateContents(): string {
     }
 }
 
-/** Creates the problem directory + source file if absent, writes .meta.json, returns the source path. */
-export function ensureSolutionFile(problem: Problem, meta: ProblemMeta): string {
+/**
+ * Creates the problem directory + source file if absent (NEVER overwrites an
+ * existing one — a language switch must not touch another language's file),
+ * writes the shared .meta.json, returns the source path. `ext` picks which
+ * language's file; omit for the default (codeforces.extension).
+ */
+export function ensureSolutionFile(problem: Problem, meta: ProblemMeta, ext?: string): string {
     // Fail early with a clear message rather than throwing a raw path error.
     archiveRoot();
-    const target = solutionPath(problem);
+    const target = solutionPath(problem, ext);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     if (!fs.existsSync(target)) {
         fs.writeFileSync(target, templateContents(), 'utf8');

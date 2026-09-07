@@ -55,6 +55,8 @@ export interface RunRecord {
      *  one record — `count` invocations, most recent at `lastAt`. */
     count?: number;
     lastAt?: number;
+    /** Which language file this run was — a problem can hold more than one at once. */
+    language?: string;
     source: string;
     compileOk: boolean;
     compileOutput?: string;
@@ -243,7 +245,7 @@ export function writeRun(dir: string, rec: RunRecord): void {
     if (last) {
         try {
             const prev = JSON.parse(fs.readFileSync(last, 'utf8')) as RunRecord;
-            if (prev.source === rec.source && runOutcomeSig(prev) === runOutcomeSig(rec)) {
+            if (prev.source === rec.source && prev.language === rec.language && runOutcomeSig(prev) === runOutcomeSig(rec)) {
                 prev.count = (prev.count ?? 1) + 1;
                 prev.lastAt = rec.at || Date.now();
                 fs.writeFileSync(last, JSON.stringify(prev, null, 2), 'utf8');
@@ -447,10 +449,17 @@ export function selfTest(): void {
         assert.strictEqual(recordFiles(dir, 'runs').length, 2, 'changed outcome → second file');
         assert.strictEqual(listAttempts(dir).length, 1, 'one attempt');
 
+        // same source + outcome but a DIFFERENT language never folds — two
+        // language files could plausibly share identical source (e.g. both
+        // empty), and that must not corrupt one language's run count with
+        // another's.
+        writeRun(dir, { ...run1, at: 240, language: '.py' });
+        assert.strictEqual(recordFiles(dir, 'runs').length, 3, 'different language never folds into a same-source run');
+
         const idx = readIndex();
         const e = idx.problems[keyOf(ref)];
         assert.ok(e, 'index entry present');
-        assert.strictEqual(e.runCount, 4, 'runCount sums folded counts (3 + 1)');
+        assert.strictEqual(e.runCount, 5, 'runCount sums folded counts (3 + 1 + 1)');
         assert.strictEqual(e.attemptCount, 1, 'attemptCount');
         assert.strictEqual(e.solved, true, 'solved from Accepted attempt');
         assert.strictEqual(e.lastActivity, 300, 'lastActivity = newest record (the attempt)');
