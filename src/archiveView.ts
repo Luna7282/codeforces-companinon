@@ -64,6 +64,7 @@ export class ArchiveTree implements vscode.TreeDataProvider<Node> {
             case 'judge': {
                 const i = new vscode.TreeItem(cap(node.judge), vscode.TreeItemCollapsibleState.Expanded);
                 i.iconPath = new vscode.ThemeIcon('archive');
+                i.command = { command: 'codeforces.archiveScorecard', title: 'Show scorecard', arguments: [node] };
                 return i;
             }
             case 'scope': {
@@ -72,6 +73,7 @@ export class ArchiveTree implements vscode.TreeDataProvider<Node> {
                 const i = new vscode.TreeItem(node.seg, vscode.TreeItemCollapsibleState.Collapsed);
                 i.description = `${solved}/${entries.length} solved`;
                 i.iconPath = new vscode.ThemeIcon('folder');
+                i.command = { command: 'codeforces.archiveScorecard', title: 'Show scorecard', arguments: [node] };
                 return i;
             }
             case 'problem': {
@@ -184,6 +186,18 @@ export class ArchiveTree implements vscode.TreeDataProvider<Node> {
 
     private entriesInScope(judge: string, seg: string): ArchiveIndexEntry[] {
         return Object.values(readIndex().problems).filter((e) => e.ref.judge === judge && scopeSeg(e) === seg);
+    }
+
+    /** Title/subtitle + the entries a scorecard for this node should roll up — undefined for node types with no scorecard. */
+    scorecardFor(node: Node): { title: string; subtitle: string; entries: ArchiveIndexEntry[] } | undefined {
+        if (node.t === 'judge') {
+            const entries = Object.values(readIndex().problems).filter((e) => e.ref.judge === node.judge);
+            return { title: `${cap(node.judge)} — scorecard`, subtitle: 'Every group, gym, and contest', entries };
+        }
+        if (node.t === 'scope') {
+            return { title: `${node.seg} — scorecard`, subtitle: cap(node.judge), entries: this.entriesInScope(node.judge, node.seg) };
+        }
+        return undefined;
     }
 
     private entryVisible(e: ArchiveIndexEntry): boolean {
@@ -438,3 +452,5 @@ export const VERDICT_FILTERS = [
 export function forceRebuild(): void {
     rebuildIndex();
 }
+
+export type { Node as ArchiveNode };

@@ -621,6 +621,36 @@ Right after a fresh verdict, the tree also gets a short-lived optimistic
 override so the icon repaints immediately rather than waiting for the API's
 own status to catch up (which can lag a fresh Accepted by up to a minute).
 
+### Scorecards — one computation, every scope
+
+`Codeforces: Stats` only ever summarised the whole archive. Asked to roll up
+per group/gym/contest too, plus a language breakdown, reachable by clicking
+a scope in the Archive view.
+
+The aggregation (`computeStats` in the new `scorecard.ts`) takes a plain
+`ArchiveIndexEntry[]` and knows nothing about *which* scope produced that
+list — the whole-archive card and a single-contest card are the exact same
+function and the exact same webview template, just fed a different (and,
+for the whole archive, unfiltered) entry list. `ArchiveTree.scorecardFor(node)`
+is the only place scope-to-entries mapping lives, reusing the tree's
+existing `entriesInScope` rather than inventing a second way to walk the
+index. "One unified card" fell out of this for free — there was never a
+second card to unify with the first.
+
+Language breakdown counts *unique problems* per language (a `Set` of
+archive keys), not raw attempt counts, so "solved in Python" means at least
+one Accepted attempt tagged `.py` for that problem, independent of whether
+it's also solved in C++. Given multiple languages coexist per problem now
+(see "Multiple languages per problem", above), a raw attempt tally would
+double-count a problem solved in both.
+
+Clicking a group/gym/contest row in the Archive view now opens its
+scorecard instead of doing nothing (`scope`/`judge` nodes had no `.command`
+before) — but a `TreeItem` with both a `.command` and a collapsible state
+routes label-clicks to the command and only the twisty arrow to expand/
+collapse. Worth knowing before it reads as "clicking stopped expanding
+things."
+
 ## Usable without the companion
 
 The read-only public API is not behind the Cloudflare block described above,

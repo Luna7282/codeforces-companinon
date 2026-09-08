@@ -23,7 +23,7 @@ import { RelayServer } from './relay';
 import { setCacheDir, clearCache } from './cache';
 import { ResultsViewProvider, ResultsActions } from './resultsView';
 import { failingTest, isAccepted } from './verdict';
-import { showStats } from './statsView';
+import { showStats, showScopeStats } from './statsView';
 import { setArchiveRoot, hasArchiveRoot, rebuildIndex, writeRun, RunRecord } from './archive';
 import { migrateOldLayout, hasOldLayout } from './migrate';
 import {
@@ -33,7 +33,8 @@ import {
     openArchiveEntry,
     diffArchiveEntry,
     VERDICT_FILTERS,
-    forceRebuild
+    forceRebuild,
+    ArchiveNode
 } from './archiveView';
 import { showWalkthrough } from './walkthrough';
 import { DEFAULT_LANGUAGES, LanguagesConfig, extensionForLanguageName } from './languages';
@@ -229,6 +230,12 @@ export function activate(context: vscode.ExtensionContext): void {
         }),
         vscode.commands.registerCommand('codeforces.archiveFilter', archiveFilter),
         vscode.commands.registerCommand('codeforces.archiveSearch', archiveSearch),
+        vscode.commands.registerCommand('codeforces.archiveScorecard', (n: ArchiveNode) => {
+            const info = archiveView?.scorecardFor(n);
+            if (info) {
+                showScopeStats(info.title, info.subtitle, info.entries);
+            }
+        }),
         vscode.window.onDidChangeActiveTextEditor(() => syncActiveProblem()),
         vscode.workspace.onDidChangeConfiguration((e) => {
             if (e.affectsConfiguration('codeforces.languages')) {
@@ -280,7 +287,7 @@ export function activate(context: vscode.ExtensionContext): void {
         vscode.commands.registerCommand('codeforces.lastVerdict', () => output.show()),
         vscode.commands.registerCommand('codeforces.relayInfo', relayInfo),
         vscode.commands.registerCommand('codeforces.checkCompanion', checkCompanion),
-        vscode.commands.registerCommand('codeforces.stats', () => showStats(context.extensionUri)),
+        vscode.commands.registerCommand('codeforces.stats', () => showStats()),
         vscode.commands.registerCommand('codeforces.changeWorkspace', () => changeWorkspaceFolder()),
         vscode.commands.registerCommand('codeforces.setupWalkthrough', () =>
             showWalkthrough(relay ? { running: relay.running, port: relay.port } : undefined)

@@ -46,7 +46,7 @@ If that's a dealbreaker, this extension isn't for you yet. If it's fine, the com
 - **Results panel** (below the tree): one card per test — PASS/FAIL badge, runtime, input/expected/actual with the first differing line highlighted. Passing cards collapse; failing ones stay open. Add your own test cases. Compile errors show verbatim, in the panel, not a toast. Submit and watch the verdict from the same panel.
 - **Submission compiler** shown in the status bar next to the open problem — click to change it. Picking a different language scaffolds that language's file in the same problem folder (never touching one that already exists); run and submit always act on whichever file is focused, not a global setting, so C++ and Python solutions for the same problem coexist and compile independently.
 - **Local archive of everything you've done** — every run and every submission, including the ones Codeforces refused outright — searchable offline in a dedicated **Archive view** (its own Activity Bar icon): browse by judge → contest/group/gym → problem, a timeline per problem (consecutive identical outcomes collapse into one row), click any entry to reopen that exact source read-only and diff it against your current file.
-- **`Codeforces: Stats`** — attempted / solved / solve rate / attempts-per-solve, and a verdict breakdown, from that local history.
+- **`Codeforces: Stats`** — attempted / solved / solve rate / attempts-per-solve, a verdict breakdown, and a language breakdown, from that local history. Click a group, gym, or contest in the Archive view for the same scorecard scoped to just that one.
 
 <!-- TODO (before publishing): screenshot — Archive view timeline -->
 
@@ -163,10 +163,12 @@ src/
   archive.ts      judge-agnostic on-disk layout, per-run/attempt records, rolled-up index
   migrate.ts      one-time move from the old layout (+ selfTest)
   files.ts        solution scaffolding, per-problem metadata (ProblemMeta over archive.ts)
+  languages.ts    per-extension compile/run commands, compiler-name → extension guess (+ selfTest)
   runner.ts       compile, run samples, diff
   statement.ts    statement webview
   resultsView.ts  Results panel (samples, attempts, submit)
-  statsView.ts    Codeforces: Stats panel
+  scorecard.ts    attempted/solved/verdict/language rollup, any scope (+ selfTest)
+  statsView.ts    renders scorecard.ts's numbers — whole archive or one Archive-view scope
   archiveView.ts  Archive view — offline browse of every run and submission
   walkthrough.ts  Setup walkthrough webview
   tree.ts         sidebar, local+API solve-state reconciliation
