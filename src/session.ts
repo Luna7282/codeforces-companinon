@@ -175,8 +175,8 @@ export class Session {
     }
 
     /** Fetches a page and returns both its body and a fresh csrf token. */
-    async pageWithCsrf(url: string): Promise<{ html: string; csrf: string }> {
-        const html = await this.http.get(url);
+    async pageWithCsrf(url: string, opts?: { requireSession?: boolean }): Promise<{ html: string; csrf: string }> {
+        const html = await this.http.get(url, opts);
         return { html, csrf: Session.findCsrf(html) };
     }
 

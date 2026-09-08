@@ -3,6 +3,10 @@ import { Session } from './session';
 import { Language, Problem, submitUrl } from './types';
 import { parseLanguages } from './scrape';
 
+function snippet(html: string): string {
+    return html.replace(/\s+/g, ' ').trim().slice(0, 400);
+}
+
 export interface Verdict {
     submissionId: string;
     verdict: string;
@@ -41,10 +45,33 @@ function computeTta(cookie39ce7: string | undefined): string {
 }
 
 export async function fetchLanguages(session: Session, problem: Problem): Promise<Language[]> {
-    const html = await session.http.get(submitUrl(problem));
+    const url = submitUrl(problem);
+    let html: string;
+    try {
+        html = await session.http.get(url, { requireSession: true });
+    } catch (err) {
+        session.http.log(`[fetchLanguages] GET ${url} threw: ${(err as Error).message}`);
+        throw err;
+    }
     const langs = parseLanguages(html);
+    session.http.log(`[fetchLanguages] GET ${url} -> ${html.length} chars, ${langs.length} language(s) parsed`);
     if (langs.length === 0) {
-        throw new Error('No compiler list on the submit page. You are probably signed out, or lack access to this contest.');
+        const handle = Session.findHandle(html);
+        session.http.log(
+            `[fetchLanguages] no languages parsed; handle=${handle ?? '(none — looks signed out)'}; body: ${snippet(html)}`
+        );
+        if (!handle) {
+            throw new Error(
+                "Codeforces served a real page, but with no signed-in profile link — your session isn't being " +
+                    'carried. If you\'re logged in through Chrome, try again (the companion may have fetched this ' +
+                    'via its service worker instead of a page tab); otherwise re-run "Codeforces: Import session ' +
+                    'from browser".'
+            );
+        }
+        throw new Error(
+            `No compiler list on the submit page, though you're signed in as ${handle} — you probably lack access ` +
+                'to this contest (not started yet, or you are not registered).'
+        );
     }
     return langs;
 }
@@ -56,7 +83,7 @@ export async function submitSolution(
     programTypeId: string
 ): Promise<string> {
     const url = submitUrl(problem);
-    const { html, csrf } = await session.pageWithCsrf(url);
+    const { html, csrf } = await session.pageWithCsrf(url, { requireSession: true });
 
     if (parseLanguages(html).length === 0) {
         throw new Error('Submit page did not load a compiler list — sign in again with "Codeforces: Log in".');
@@ -115,7 +142,7 @@ export async function latestSubmissionId(
     session: Session,
     problem: Problem
 ): Promise<string | undefined> {
-    const html = await session.http.get(statusUrl(problem));
+    const html = await session.http.get(statusUrl(problem), { requireSession: true });
     const $ = cheerio.load(html);
     const wanted = new RegExp(`/problem/${problem.index}$`);
     let found: string | undefined;
@@ -149,7 +176,7 @@ export async function fetchVerdict(
     problem: Problem,
     submissionId: string
 ): Promise<Verdict> {
-    const html = await session.http.get(statusUrl(problem));
+    const html = await session.http.get(statusUrl(problem), { requireSession: true });
     const $ = cheerio.load(html);
     const row = $(`tr[data-submission-id="${submissionId}"]`).first();
     if (row.length === 0) {

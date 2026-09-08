@@ -1170,12 +1170,24 @@ async function pickLanguage(): Promise<string | undefined> {
             return undefined;
         }
         const currentExt = path.extname(found.file);
-        const targetExt = extensionForLanguageName(picked.name) ?? currentExt;
+        const inferredExt = extensionForLanguageName(picked.name);
+        const targetExt = inferredExt ?? currentExt;
+        dbg(
+            `[pickLanguage] picked "${picked.name}" (id ${picked.id}); inferredExt=${inferredExt ?? '(none — heuristic missed this name)'}; ` +
+                `currentExt=${currentExt}; targetExt=${targetExt}`
+        );
 
         if (targetExt !== currentExt) {
+            const scaffoldPath = solutionPath(found.meta.problem, targetExt);
+            dbg(`[pickLanguage] different extension — scaffolding ${scaffoldPath}`);
             const newFile = ensureSolutionFile(found.meta.problem, found.meta, targetExt);
             const doc = await vscode.workspace.openTextDocument(newFile);
             await vscode.window.showTextDocument(doc, vscode.ViewColumn.One);
+        } else {
+            dbg(
+                `[pickLanguage] same extension as active file — not scaffolding (` +
+                    `${inferredExt ? 'picked language already matches active extension' : 'heuristic did not recognize this compiler name, fell back to currentExt'})`
+            );
         }
 
         await setLanguageName(targetExt, picked.name);
@@ -1195,6 +1207,7 @@ async function pickLanguage(): Promise<string | undefined> {
  */
 async function resolveProgramTypeId(file: string, problem: Problem): Promise<string | undefined> {
     const ext = path.extname(file);
+    dbg(`[resolveProgramTypeId] quiet resolve for ${file} (ext=${ext}) — this path never scaffolds a new file`);
     let langs: Language[];
     try {
         langs = await fetchLanguages(session, problem);
@@ -1205,8 +1218,13 @@ async function resolveProgramTypeId(file: string, problem: Problem): Promise<str
     const savedName = languageNameFor(ext);
     const match = savedName ? langs.find((l) => l.name === savedName) : undefined;
     if (match) {
+        dbg(`[resolveProgramTypeId] remembered name "${savedName}" matched — using id ${match.id}, no prompt shown`);
         return match.id;
     }
+    dbg(
+        `[resolveProgramTypeId] no remembered match (savedName=${savedName ?? '(none)'}) — prompting; ` +
+            `any pick here only updates the compiler name for ${ext}, it will not create a file`
+    );
     const picked = await promptForLanguage(langs);
     if (!picked) {
         return undefined;

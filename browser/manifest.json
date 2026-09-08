@@ -3,7 +3,7 @@
   "name": "Inline for Codeforces — submit relay",
   "version": "0.2.0",
   "description": "Companion for Inline for Codeforces: fills the submit form and reads pages from your logged-in browser tab.",
-  "permissions": ["tabs", "scripting", "storage", "alarms"],
+  "permissions": ["tabs", "scripting", "storage", "alarms", "cookies"],
   "host_permissions": ["https://codeforces.com/*", "https://*.codeforces.com/*", "http://127.0.0.1/*"],
   "background": { "service_worker": "background.js" },
   "content_scripts": [

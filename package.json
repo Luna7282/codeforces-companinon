@@ -314,7 +314,7 @@
     "vscode:prepublish": "npm run bundle",
     "gen:companion-config": "node scripts/gen-companion-config.js",
     "build:companion": "npm run gen:companion-config && node browser/build.js",
-    "selftest": "npm run compile && node out/relay.js && node out/archive.js && node out/migrate.js && node out/scrape.js && node out/languages.js && node out/scorecard.js && npm run bundle && node scripts/check-activate.js",
+    "selftest": "npm run compile && node out/relay.js && node out/http.js && node out/archive.js && node out/migrate.js && node out/scrape.js && node out/languages.js && node out/scorecard.js && npm run bundle && node scripts/check-activate.js",
     "deploy": "npm run compile && npm run bundle && node -e \"require('fs').mkdirSync('dist',{recursive:true})\" && npx vsce package --no-dependencies --out dist/codeforces-inline.vsix && code --install-extension dist/codeforces-inline.vsix --force"
   },
   "dependencies": {

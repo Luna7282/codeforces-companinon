@@ -171,6 +171,49 @@ Implication: the companion is only fully functional while at least one
 `codeforces.com` tab has passed the Cloudflare check. If every path 403s, the
 raw 403 is surfaced with a message pointing at that.
 
+### Session lost to a direct Node fetch — the latch only knew about Cloudflare
+
+`fetchLanguages` (the submit page's compiler list) started coming back
+empty, with the generic "you are probably signed out, or lack access"
+message — misleading either way, since the two causes need opposite fixes.
+Diagnostic logging (fetch status, a body snippet, `Session.findHandle`)
+showed a real 143 KB Codeforces page with no signed-in profile link: not a
+Cloudflare block, not a missing-access response, just genuinely signed out.
+
+First theory: the companion's service-worker `fetch()` initiator is
+`chrome-extension://<id>`, which Chrome treats as cross-site to
+codeforces.com, so a `SameSite=Lax/Strict` `JSESSIONID` could be silently
+withheld even with `credentials:'include'` — same shape of problem as the
+Cloudflare-vs-service-worker issue above, just a cookie instead of a
+fingerprint check. Wrong. Once `/companion-log` (a debug sink added
+specifically to check this — the companion's own devtools console isn't
+visible from inside VS Code) actually reached the output channel, the logs
+showed `cookieInJar(JSESSIONID)= true` and `signedOut= false` on the
+service-worker fetch itself. The companion was never the problem.
+
+The real cause: the HTTP client's relay latch (see "Fix: route reads
+through a companion browser extension", above) only flips on a Cloudflare
+interstitial. A signed-out page is a perfectly normal 200 with real
+markup — nothing about it looks like a block — so the latch never tripped,
+and `fetchLanguages` read straight over Node the whole time, using
+whatever sat in the extension's own cookie jar (stale, or never populated
+from a browser import) instead of the browser's actual session. The
+companion was never even being asked; `chrome://extensions`'s network tab
+for it showed nothing but `/pending` long-polls, confirming the request
+never left Node.
+
+Fix: `CfHttp.get()` takes an optional `{ requireSession: true }`, set on
+every read that is genuinely useless without a session (the submit page,
+the "my submissions" status page) but left off reads that work fine
+anonymously (statements, contest lists) — latching every read on a
+signed-out result would otherwise force a user who never imported a
+session through the companion forever. A signed-out result on a
+session-required read now latches the relay exactly the way a Cloudflare
+challenge always did. Every transport decision (direct Node, latched
+relay, freshly-latching) now logs a `[transport]` line, since this bug's
+first symptom looked identical to a dozen other "no compiler list" causes
+and only a transport-level log could actually distinguish them.
+
 ### Turnstile is enforced on the submit form
 
 The submit page (both the contest/gym/group forms and the general

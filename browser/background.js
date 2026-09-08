@@ -31,6 +31,24 @@ const log = (...a) => {
     if (DEBUG) console.log('[cf-relay]', ...a);
 };
 
+// Same gate as log(), but also forwards to the relay so it lands in VS Code's
+// Codeforces output channel — the service worker's own console isn't visible
+// from inside VS Code, and this trace only matters while debugging a specific
+// fetch, so it's never retained on the server (see /companion-log in relay.ts).
+const report = (...a) => {
+    log(...a);
+    if (!DEBUG) return;
+    config()
+        .then(({ port, token }) =>
+            fetch(`http://127.0.0.1:${port}/companion-log`, {
+                method: 'POST',
+                headers: { 'X-Relay-Token': token, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message: a.map(String).join(' ') })
+            })
+        )
+        .catch(() => {});
+};
+
 log('worker eval: script start', new Date().toISOString());
 
 async function config() {
@@ -202,6 +220,20 @@ const isCloudflareChallenge = (status, body) =>
     (status === 403 || status === 503) &&
     /Just a moment|cf[-_]chl|cf-browser-verification|Enable JavaScript and cookies/i.test(body || '');
 
+// Defensive fallback, not the fix for the bug this was written to chase (see
+// LESSONS.md, "Session lost to a direct Node fetch" — the real cause was that
+// the extension's own reads never reached the companion at all, since the SW
+// fetch here already carries the session fine). Kept in case a signed-out
+// page ever does slip through this path for some other reason: same tab
+// retry a Cloudflare challenge gets, since a signed-out result is a normal
+// 200 and can't be caught by status code the way a Cloudflare block is. Same
+// header marker src/session.ts's Session.findHandle() uses.
+const looksSignedOut = (status, body) =>
+    status >= 200 &&
+    status < 400 &&
+    /X-Csrf-Token|class="lang-chooser"|id="pageContent"/i.test(body || '') &&
+    !/href="\/profile\//i.test(body || '');
+
 // codeforces.com itself, or any of its subdomains (statement images live on
 // espresso.codeforces.com — see LESSONS.md, "Statement images").
 function isAllowedCodeforcesUrl(url) {
@@ -364,6 +396,7 @@ async function handleFetch(port, token, job) {
             }
         }
     } else {
+        const jar = await chrome.cookies.get({ url: 'https://codeforces.com', name: 'JSESSIONID' }).catch(() => null);
         try {
             const r = await fetch(job.url, { credentials: 'include', redirect: 'follow' });
             status = r.status;
@@ -372,13 +405,20 @@ async function handleFetch(port, token, job) {
             status = 0;
             body = String((e && e.message) || e);
         }
-        if (isCloudflareChallenge(status, body)) {
-            log('SW fetch was Cloudflare-challenged; retrying from a tab');
+        const challenged = isCloudflareChallenge(status, body);
+        const signedOut = !challenged && looksSignedOut(status, body);
+        report(
+            'SW fetch', job.url, '-> status', status, 'cookieInJar(JSESSIONID)=', Boolean(jar),
+            'challenged=', challenged, 'signedOut=', signedOut
+        );
+        if (challenged || signedOut) {
+            report(challenged ? 'SW fetch was Cloudflare-challenged; retrying from a tab' : 'SW fetch lost the session (cookie in jar but page renders signed-out); retrying from a tab');
             const tabRes = await fetchFromCodeforcesTab(job.url);
             if (tabRes) {
                 status = tabRes.status;
                 body = tabRes.body;
                 via = tabRes.via;
+                report('tab fetch', job.url, 'via', via, '-> status', status, 'signedOut=', looksSignedOut(status, body));
             }
         }
     }

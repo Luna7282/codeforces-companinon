@@ -379,6 +379,22 @@ export class RelayServer {
             return;
         }
 
+        // Fire-and-forget trace line from the companion's own verbose-logging option
+        // (browser/options.html) — separate flag from codeforces.debug, since the
+        // companion runs in its own service-worker console the user can't otherwise
+        // see from inside VS Code. Unlike /companion-error this is never retained
+        // or surfaced elsewhere — it only ever reaches the output channel.
+        if (req.method === 'POST' && route === '/companion-log') {
+            this.readBody(req, (body) => {
+                const message = safeField(body, 'message');
+                if (message) {
+                    this.log(`[companion] ${message}`);
+                }
+                res.writeHead(200).end('ok');
+            });
+            return;
+        }
+
         res.writeHead(404).end('not found');
     }
 
@@ -572,6 +588,18 @@ export async function selfTest(): Promise<void> {
             body: JSON.stringify({ message: 'protocol mismatch: companion=1 relay=2' })
         });
         assert.strictEqual(srv.companionError, 'protocol mismatch: companion=1 relay=2', 'companion error recorded');
+
+        // /companion-log: a fire-and-forget trace line, not retained anywhere on the server
+        assert.strictEqual(
+            await fetch(base + '/companion-log', {
+                method: 'POST',
+                headers: { 'X-Relay-Token': TOKEN, 'Content-Type': 'application/json' },
+                body: JSON.stringify({ message: 'SW fetch -> status 200 signedOut=true' })
+            }).then((r) => r.status),
+            200,
+            '/companion-log accepts a traced message'
+        );
+        assert.strictEqual(await status('/companion-log'), 401, '/companion-log still needs a token');
 
         // deep-link ack: the companion's success signal, not a focus-loss guess
         const ackBody = (id: string) =>

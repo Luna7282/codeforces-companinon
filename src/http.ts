@@ -83,6 +83,23 @@ export class CfHttp {
         );
     }
 
+    /**
+     * A real Codeforces page (200, not a Cloudflare interstitial) with no
+     * signed-in profile link. Node's own cookie jar (imported once, or never
+     * populated) can go stale independently of the browser being logged in —
+     * unlike a Cloudflare block this is a normal 200, so it needs its own
+     * check rather than falling out of looksLikeCloudflare. Same marker
+     * background.js's looksSignedOut() and Session.findHandle() use.
+     */
+    private looksSignedOut(status: number, body: string): boolean {
+        return (
+            status >= 200 &&
+            status < 400 &&
+            /X-Csrf-Token|class="lang-chooser"|id="pageContent"/i.test(body) &&
+            !/href="\/profile\//i.test(body)
+        );
+    }
+
     loadCookies(c: CookieRecord | undefined): void {
         this.cookies = c ? { ...c } : {};
     }
@@ -156,10 +173,23 @@ export class CfHttp {
         return h;
     }
 
-    async get(url: string): Promise<string> {
+    /**
+     * @param opts.requireSession The page is useless without a signed-in
+     * session (submit form, "my" status page) — Node's own cookie jar can be
+     * stale or never populated even while the browser is logged in, and that
+     * shows up as a normal 200 with signed-out markup, not a Cloudflare
+     * block. So for these reads a signed-out result is treated exactly like
+     * a Cloudflare challenge: retry through the companion, which fetches in
+     * page context in an actual signed-in tab. Leave unset for reads that
+     * work fine anonymously (problem statements, contest lists) — otherwise
+     * a user who never imported a session would force every read through
+     * the companion forever.
+     */
+    async get(url: string, opts?: { requireSession?: boolean }): Promise<string> {
         // Once Cloudflare has blocked a direct read this session, every non-API
         // read goes straight through the companion — no failed Node request first.
         if (this.relayLatched && this.relayFetcher && !this.isApi(url)) {
+            this.log(`[transport] ${url} -> relay (latched)`);
             return this.viaRelay(url);
         }
         return this.limiter.run(async () => {
@@ -172,13 +202,26 @@ export class CfHttp {
             if (this.looksLikeCloudflare(res.status, body)) {
                 if (this.relayFetcher && !this.isApi(url)) {
                     this.relayLatched = true;
+                    this.log(`[transport] ${url} -> direct Node fetch Cloudflare-challenged (${res.status}); latching relay`);
                     return this.viaRelay(url);
                 }
                 this.guardCloudflare(res.status, body, url);
             }
+            if (opts?.requireSession && this.looksSignedOut(res.status, body)) {
+                if (this.relayFetcher && !this.isApi(url)) {
+                    this.relayLatched = true;
+                    this.log(
+                        `[transport] ${url} -> direct Node fetch came back signed-out (${res.status}) on a ` +
+                            'session-required read; latching relay'
+                    );
+                    return this.viaRelay(url);
+                }
+                this.log(`[transport] ${url} -> direct Node fetch signed-out (${res.status}); no companion registered`);
+            }
             if (!res.ok) {
                 throw new Error(`GET ${url} returned ${res.status}`);
             }
+            this.log(`[transport] ${url} -> direct Node fetch (${res.status})`);
             return body;
         });
     }
@@ -228,6 +271,7 @@ export class CfHttp {
 
     private async relayGetOnce(url: string): Promise<string> {
         const out: RelayFetchResult = await this.relayFetcher!(url);
+        this.log(`[transport] ${url} -> relay round-trip returned status ${out.status}`);
         if (this.looksLikeCloudflare(out.status, out.body)) {
             throw new Error(
                 'Codeforces served a Cloudflare challenge in the browser too — open codeforces.com in Chrome, ' +
@@ -345,4 +389,79 @@ export class CfHttp {
                 'or run "Codeforces: Import session from browser" if the Cloudflare check is off.'
         );
     }
+}
+
+const SIGNED_OUT_PAGE = '<html><meta name="X-Csrf-Token" content="x"><body>Enter</body></html>';
+const SIGNED_IN_PAGE = '<html><body><a href="/profile/tourist">tourist</a></body></html>';
+
+/**
+ * Stubs global fetch + a relay fetcher — no real network — to pin down the
+ * transport-selection logic fixed in LESSONS.md ("session lost to a direct
+ * Node fetch"): a session-required read that comes back signed-out over
+ * direct Node must retry through the relay, and a read that doesn't ask for
+ * a session must not. Run: node out/http.js
+ */
+export async function selfTest(): Promise<void> {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const assert: typeof import('assert') = require('assert');
+    const realFetch = globalThis.fetch;
+    try {
+        // requireSession + signed-out direct response -> latches relay and retries there.
+        {
+            const http = new CfHttp();
+            globalThis.fetch = (async () =>
+                new Response(SIGNED_OUT_PAGE, { status: 200 })) as unknown as typeof fetch;
+            let relayCalls = 0;
+            http.setRelayFetcher(async () => {
+                relayCalls++;
+                return { status: 200, body: SIGNED_IN_PAGE };
+            });
+            const body = await http.get('https://codeforces.com/contest/1/submit', { requireSession: true });
+            assert.strictEqual(relayCalls, 1, 'signed-out + requireSession retries once through the relay');
+            assert.strictEqual(body, SIGNED_IN_PAGE, 'the relay body wins once latched');
+            assert.strictEqual(http.relayActive, true, 'latches for subsequent reads too');
+        }
+
+        // Same signed-out response, but requireSession not set -> stays direct, no relay call.
+        {
+            const http = new CfHttp();
+            globalThis.fetch = (async () =>
+                new Response(SIGNED_OUT_PAGE, { status: 200 })) as unknown as typeof fetch;
+            let relayCalls = 0;
+            http.setRelayFetcher(async () => {
+                relayCalls++;
+                return { status: 200, body: SIGNED_IN_PAGE };
+            });
+            const body = await http.get('https://codeforces.com/problemset/problem/1/A');
+            assert.strictEqual(relayCalls, 0, 'no requireSession -> signed-out direct response is accepted as-is');
+            assert.strictEqual(body, SIGNED_OUT_PAGE);
+            assert.strictEqual(http.relayActive, false, 'not latched for a read that never asked for a session');
+        }
+
+        // requireSession + already signed-in direct response -> no relay call at all.
+        {
+            const http = new CfHttp();
+            globalThis.fetch = (async () =>
+                new Response(SIGNED_IN_PAGE, { status: 200 })) as unknown as typeof fetch;
+            let relayCalls = 0;
+            http.setRelayFetcher(async () => {
+                relayCalls++;
+                return { status: 200, body: SIGNED_IN_PAGE };
+            });
+            const body = await http.get('https://codeforces.com/contest/1/submit', { requireSession: true });
+            assert.strictEqual(relayCalls, 0, 'already signed in over direct Node -> no relay round-trip needed');
+            assert.strictEqual(body, SIGNED_IN_PAGE);
+        }
+
+        console.log('http selfTest: OK');
+    } finally {
+        globalThis.fetch = realFetch;
+    }
+}
+
+if (require.main === module) {
+    selfTest().catch((e) => {
+        console.error('http selfTest: FAIL\n', e);
+        process.exit(1);
+    });
 }
